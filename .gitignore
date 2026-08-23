@@ -1,0 +1,19 @@
+# Entornos virtuales
+venv/
+venv312/
+
+# Dataset y cachés de entrenamiento
+archive/
+train_db_cache/
+val_db_cache/
+
+# Scripts y assets que se quedan fuera del repo público
+train_model.py
+generar_arquitectura.py
+generar_infografia.py
+arquitectura_3d.png
+grafica_entrenamiento.png
+infografia_educativa.png
+
+__pycache__/
+*.pyc

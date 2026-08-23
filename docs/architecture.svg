@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 968 220" width="968" height="220" role="img" aria-label="CNN architecture: input 64x64x3 through three conv/pool blocks to a 36-class output">
+  <rect x="0.5" y="0.5" width="967" height="219" rx="6" fill="#ffffff" stroke="#d0d7de"/>
+  <line x1="24" y1="106" x2="944" y2="106" stroke="#d0d7de" stroke-width="1" stroke-dasharray="3 3"/>
+<g>
+  <rect x="63.0" y="52.0" width="14" height="108" fill="#f6f8fa" stroke="#57606a" stroke-width="1"/>
+  <text x="70" y="194" text-anchor="middle" fill="#1f2328" font-size="10.5" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">Input</text>
+  <text x="70" y="209" text-anchor="middle" fill="#57606a" font-size="9.5" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">64x64x3</text>
+</g>
+<g>
+  <rect x="145.0" y="52.0" width="34" height="108" fill="#f6f8fa" stroke="#57606a" stroke-width="1"/>
+  <text x="162" y="194" text-anchor="middle" fill="#1f2328" font-size="10.5" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">Conv2D_1</text>
+  <text x="162" y="209" text-anchor="middle" fill="#57606a" font-size="9.5" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">64x64x32</text>
+</g>
+<g>
+  <rect x="237.0" y="68.0" width="34" height="76" fill="#f6f8fa" stroke="#57606a" stroke-width="1"/>
+  <text x="254" y="194" text-anchor="middle" fill="#1f2328" font-size="10.5" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">MaxPool_1</text>
+  <text x="254" y="209" text-anchor="middle" fill="#57606a" font-size="9.5" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">32x32x32</text>
+</g>
+<g>
+  <rect x="324.0" y="68.0" width="44" height="76" fill="#f6f8fa" stroke="#57606a" stroke-width="1"/>
+  <text x="346" y="194" text-anchor="middle" fill="#1f2328" font-size="10.5" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">Conv2D_2</text>
+  <text x="346" y="209" text-anchor="middle" fill="#57606a" font-size="9.5" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">32x32x64</text>
+</g>
+<g>
+  <rect x="416.0" y="81.0" width="44" height="50" fill="#f6f8fa" stroke="#57606a" stroke-width="1"/>
+  <text x="438" y="194" text-anchor="middle" fill="#1f2328" font-size="10.5" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">MaxPool_2</text>
+  <text x="438" y="209" text-anchor="middle" fill="#57606a" font-size="9.5" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">16x16x64</text>
+</g>
+<g>
+  <rect x="508.0" y="81.0" width="44" height="50" fill="#f6f8fa" stroke="#57606a" stroke-width="1"/>
+  <text x="530" y="194" text-anchor="middle" fill="#1f2328" font-size="10.5" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">Conv2D_3</text>
+  <text x="530" y="209" text-anchor="middle" fill="#57606a" font-size="9.5" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">16x16x64</text>
+</g>
+<g>
+  <rect x="600.0" y="91.0" width="44" height="30" fill="#f6f8fa" stroke="#57606a" stroke-width="1"/>
+  <text x="622" y="194" text-anchor="middle" fill="#1f2328" font-size="10.5" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">MaxPool_3</text>
+  <text x="622" y="209" text-anchor="middle" fill="#57606a" font-size="9.5" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">8x8x64</text>
+</g>
+<g>
+  <rect x="710.0" y="47.0" width="8" height="118" fill="#f6f8fa" stroke="#57606a" stroke-width="1"/>
+  <text x="714" y="194" text-anchor="middle" fill="#1f2328" font-size="10.5" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">Flatten</text>
+  <text x="714" y="209" text-anchor="middle" fill="#57606a" font-size="9.5" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">4096</text>
+</g>
+<g>
+  <rect x="802.0" y="71.0" width="8" height="70" fill="#f6f8fa" stroke="#57606a" stroke-width="1"/>
+  <text x="806" y="194" text-anchor="middle" fill="#1f2328" font-size="10.5" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">Dense</text>
+  <text x="806" y="209" text-anchor="middle" fill="#57606a" font-size="9.5" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">128</text>
+</g>
+<g>
+  <rect x="894.0" y="84.0" width="8" height="44" fill="#ddf4ff" stroke="#0969da" stroke-width="1"/>
+  <text x="898" y="194" text-anchor="middle" fill="#1f2328" font-size="10.5" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">Dense</text>
+  <text x="898" y="209" text-anchor="middle" fill="#57606a" font-size="9.5" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">36 (output)</text>
+</g>
+
+</svg>

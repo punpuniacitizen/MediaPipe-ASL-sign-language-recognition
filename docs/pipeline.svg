@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 210" width="920" height="210" role="img" aria-label="Pipeline: capture, detection, normalization, classification">
+  <rect x="0.5" y="0.5" width="919" height="209" rx="6" fill="#ffffff" stroke="#d0d7de"/>
+  <g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+    <!-- connectors -->
+    <g stroke="#d0d7de" stroke-width="1.5" fill="none">
+      <path d="M 220 105 H 245"/>
+      <path d="M 450 105 H 475"/>
+      <path d="M 680 105 H 705"/>
+    </g>
+    <g fill="#0969da">
+      <path d="M 240 100 L 250 105 L 240 110 Z"/>
+      <path d="M 470 100 L 480 105 L 470 110 Z"/>
+      <path d="M 700 100 L 710 105 L 700 110 Z"/>
+    </g>
+
+    <!-- card 1 -->
+    <g transform="translate(20,20)">
+      <rect x="0" y="0" width="200" height="170" rx="4" fill="#f6f8fa" stroke="#d0d7de"/>
+      <rect x="0" y="0" width="200" height="3" fill="#0969da"/>
+      <text x="18" y="34" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" letter-spacing="1.5" fill="#0969da">01</text>
+      <text x="18" y="58" font-size="15" font-weight="600" fill="#1f2328">Capture</text>
+      <text font-size="12.5" fill="#57606a">
+        <tspan x="18" y="84">Webcam captures the</tspan>
+        <tspan x="18" y="102">live video feed.</tspan>
+      </text>
+    </g>
+
+    <!-- card 2 -->
+    <g transform="translate(250,20)">
+      <rect x="0" y="0" width="200" height="170" rx="4" fill="#f6f8fa" stroke="#d0d7de"/>
+      <rect x="0" y="0" width="200" height="3" fill="#0969da"/>
+      <text x="18" y="34" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" letter-spacing="1.5" fill="#0969da">02</text>
+      <text x="18" y="58" font-size="15" font-weight="600" fill="#1f2328">Detection</text>
+      <text font-size="12.5" fill="#57606a">
+        <tspan x="18" y="84">MediaPipe locates the</tspan>
+        <tspan x="18" y="102">hand and returns 21</tspan>
+        <tspan x="18" y="120">landmarks.</tspan>
+      </text>
+    </g>
+
+    <!-- card 3 -->
+    <g transform="translate(480,20)">
+      <rect x="0" y="0" width="200" height="170" rx="4" fill="#f6f8fa" stroke="#d0d7de"/>
+      <rect x="0" y="0" width="200" height="3" fill="#0969da"/>
+      <text x="18" y="34" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" letter-spacing="1.5" fill="#0969da">03</text>
+      <text x="18" y="58" font-size="15" font-weight="600" fill="#1f2328">Normalization</text>
+      <text font-size="12.5" fill="#57606a">
+        <tspan x="18" y="84">Hand is centered, scaled</tspan>
+        <tspan x="18" y="102">to 70% of the frame, and</tspan>
+        <tspan x="18" y="120">redrawn as a skeleton.</tspan>
+      </text>
+    </g>
+
+    <!-- card 4 -->
+    <g transform="translate(710,20)">
+      <rect x="0" y="0" width="190" height="170" rx="4" fill="#f6f8fa" stroke="#d0d7de"/>
+      <rect x="0" y="0" width="190" height="3" fill="#0969da"/>
+      <text x="18" y="34" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" letter-spacing="1.5" fill="#0969da">04</text>
+      <text x="18" y="58" font-size="15" font-weight="600" fill="#1f2328">Classification</text>
+      <text font-size="12.5" fill="#57606a">
+        <tspan x="18" y="84">Skeleton is resized to</tspan>
+        <tspan x="18" y="102">64x64 and classified as</tspan>
+        <tspan x="18" y="120">one of 36 signs.</tspan>
+      </text>
+    </g>
+  </g>
+</svg>

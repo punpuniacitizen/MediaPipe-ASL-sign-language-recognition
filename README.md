@@ -4,7 +4,15 @@ A computer vision system that reads American Sign Language letters and digits li
 
 Instead of classifying raw camera frames, the pipeline first isolates the *structure* of the hand. MediaPipe extracts 21 hand landmarks per frame, which are normalized — centered and scaled to a fixed frame — and redrawn as a clean skeleton on a blank canvas. That skeleton, not the photograph, is what the model sees. This design choice removes lighting, background, clothing, and skin tone as variables entirely: by the time an image reaches the network, nothing is left but hand geometry.
 
+<p align="center">
+  <img src="docs/pipeline.svg" alt="Pipeline: capture, detection, normalization, classification" width="100%">
+</p>
+
 A convolutional neural network, trained from scratch in TensorFlow on 105,420 images across 36 classes (A–Z and 0–9), classifies the skeleton. It reaches 99.5% training accuracy and 97.9% validation accuracy after 10 epochs. For live inference, the trained model is exported to ONNX and served with ONNX Runtime, so the translator starts instantly and runs in real time on CPU — no GPU or full TensorFlow runtime required at inference time.
+
+<p align="center">
+  <img src="docs/architecture.svg" alt="CNN architecture: 64x64x3 input through three convolution and pooling blocks to a 36-class output" width="100%">
+</p>
 
 To keep the on-screen output stable, two smoothing passes run on top of the raw model output: an exponential moving average on the hand landmarks (so the skeleton doesn't jitter frame to frame) and a rolling average over the last 8 predictions (so the displayed letter doesn't flicker between classes). A separate visualizer exposes the network's intermediate activations, rendering the first convolutional layer's feature maps live alongside the camera feed — useful both for understanding what the model is attending to and for debugging a bad prediction.
 
@@ -15,6 +23,14 @@ To keep the on-screen output stable, two smoothing passes run on top of the raw 
 - **Model:** Custom CNN — 3 convolutional blocks + 2 dense layers, TensorFlow/Keras
 - **Inference:** ONNX Runtime (CPU)
 - **Dataset:** 105,420 images, 36 classes, 80/20 train/validation split
+
+### Training
+
+10 epochs over 105,420 images, 20% held out for validation. Training and validation accuracy stay close throughout, which is what you want to see — a growing gap would mean the model is memorizing examples instead of learning the shape of the signs.
+
+<p align="center">
+  <img src="docs/training-accuracy.png" alt="Training and validation accuracy over 10 epochs" width="480">
+</p>
 
 ## Getting started
 

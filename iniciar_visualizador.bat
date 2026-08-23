@@ -1,5 +1,5 @@
 @echo off
-echo Iniciando Traductor ASL con Visualizador de Filtros...
+echo Starting ASL translator with filter visualizer...
 call .\venv312\Scripts\activate.bat
 python realtime_translator.py
 pause

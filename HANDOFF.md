@@ -23,7 +23,49 @@ pipeline, y actualizar el README con las métricas reales.
 
 ---
 
-## 2. Estado actual
+## 2. Primeros cinco minutos en Linux
+
+Si estás arrancando esta sesión recién entrando a Linux, este es el orden exacto. Cada paso depende
+del anterior — no saltear ninguno, y si alguno falla, parar ahí y resolverlo antes de seguir.
+
+```bash
+# 1. La GPU tiene que estar visible ANTES de instalar nada. Si esto falla, todo lo
+#    demás es tiempo perdido hasta que se resuelva el driver de NVIDIA.
+nvidia-smi
+
+# 2. Version de Python. Ni TensorFlow ni MediaPipe tienen wheels para 3.13+.
+python3 --version   # necesita ser 3.11 o 3.12; si no, instalar 3.12 aparte
+
+# 3. Clonar la branch de trabajo (NO main -- ahi todavia esta el codigo viejo).
+#    Clonar a un disco local, nunca dentro de una carpeta sincronizada (el I/O lento
+#    fue uno de los problemas originales del proyecto).
+git clone --branch wip/retrain-pipeline \
+    https://github.com/punpuniacitizen/MediaPipe-ASL-sign-language-recognition.git \
+    ~/proyecto-nn
+cd ~/proyecto-nn
+
+# 4. Dos entornos separados -- mediapipe y TensorFlow fijan versiones de protobuf
+#    incompatibles entre si (ver la seccion 6 para el detalle completo).
+python3.12 -m venv .venv-infer
+./.venv-infer/bin/pip install -r requirements.txt
+
+python3.12 -m venv .venv-train
+./.venv-train/bin/pip install -r requirements-train.txt
+
+# 5. Confirmar que TensorFlow ve la GPU. Tiene que devolver un PhysicalDevice, no una
+#    lista vacia. Si sale vacio, parar y diagnosticar antes de instalar nada mas.
+./.venv-train/bin/python -c \
+    "import tensorflow as tf; print(tf.config.list_physical_devices('GPU'))"
+```
+
+Si los cinco pasos salen bien, seguir por la sección 8 (datasets) y 9 (el pipeline en sí). El resto
+de este documento es contexto y referencia — no hace falta leerlo entero antes de empezar, pero
+conviene tenerlo a mano para las secciones 5 (invariantes que no romper), 10 (verificación) y 11
+(trampas ya resueltas, para no reintroducirlas).
+
+---
+
+## 3. Estado actual
 
 | Cosa | Estado |
 |---|---|
@@ -41,7 +83,7 @@ viejo no tiene las salidas nombradas.
 
 ---
 
-## 3. El diagnóstico (por qué se rehizo todo)
+## 4. El diagnóstico (por qué se rehizo todo)
 
 Medido alimentando al modelo viejo con imágenes del propio dataset:
 
@@ -78,14 +120,14 @@ entrenamiento. **No medía generalización.**
 
 ---
 
-## 4. Invariantes del diseño — NO ROMPER
+## 5. Invariantes del diseño — NO ROMPER
 
 Estas propiedades son la razón de ser del rediseño. Si alguna se rompe, vuelven los bugs.
 
 1. **`preprocessing.render_skeleton()` es la única función que dibuja.** La llaman el pipeline de
    entrenamiento, `evaluate.py`, `check_render.py` y el traductor. Nunca dibujar un esqueleto en otro
    lado.
-2. **`preprocessing.py` importa SOLO `cv2` y `numpy`.** No agregarle mediapipe. Ver §6: mediapipe y
+2. **`preprocessing.py` importa SOLO `cv2` y `numpy`.** No agregarle mediapipe. Ver §7: mediapipe y
    TensorFlow no pueden convivir, y este módulo tiene que ser importable desde ambos entornos. La
    paleta de mediapipe está transcrita adentro (verificada byte a byte contra la original).
 3. **`render_skeleton()` devuelve RGB genuino**, no un buffer BGR de OpenCV. Para mostrarlo en una
@@ -96,11 +138,11 @@ Estas propiedades son la razón de ser del rediseño. Si alguna se rompe, vuelve
    se les cambia el nombre, se rompe el visualizador.
 6. **`motion.py` consume landmarks en píxeles crudos, NO normalizados.** La normalización recentra la
    mano en cada frame, que es justamente lo que borra el movimiento que J y Z necesitan.
-7. **`BN_MOMENTUM = 0.9` en `train_model.py`.** No volver al 0.99 de Keras. Ver §10.
+7. **`BN_MOMENTUM = 0.9` en `train_model.py`.** No volver al 0.99 de Keras. Ver §11.
 
 ---
 
-## 5. Inventario de archivos
+## 6. Inventario de archivos
 
 ### Pipeline (todo nuevo o reescrito)
 
@@ -135,7 +177,7 @@ MODEL_INPUT_SIZE = 96        # entrada del modelo (antes 64)
 HAND_MODEL_COMPLEXITY = 1    # compartido: dataset e inferencia miden con el mismo detector
 
 # train_model.py
-BN_MOMENTUM = 0.9            # NO usar el 0.99 de Keras — ver §10
+BN_MOMENTUM = 0.9            # NO usar el 0.99 de Keras — ver §11
 
 # realtime_translator.py
 CONFIDENCE_FLOOR = 0.50      # debajo de esto muestra "Not sure..."
@@ -144,7 +186,7 @@ COMMIT_FRAMES = 10           # frames seguidos de acuerdo antes de confirmar
 SMOOTHING_WINDOW = 8         # promedio móvil de probabilidades
 LANDMARK_ALPHA = 0.35        # suavizado exponencial de los landmarks
 
-# motion.py  (calibrar contra una mano real — ver §9)
+# motion.py  (calibrar contra una mano real — ver §10)
 HISTORY_FRAMES = 24          # ~0.8 s a 30 fps
 MIN_PATH_LENGTH = 0.55       # recorrido mínimo, en anchos de mano
 MOVING_THRESHOLD = 0.035     # velocidad por encima de la cual la mano "se mueve"
@@ -156,7 +198,7 @@ Z_MIN_HORIZONTAL = 0.30
 
 ---
 
-## 6. Setup en Linux
+## 7. Setup en Linux
 
 ### Trampa central: mediapipe y TensorFlow NO conviven
 
@@ -207,7 +249,7 @@ está bien así. El cuello de botella es el render en CPU, no la GPU, y complica
 
 ---
 
-## 7. Los datasets
+## 8. Los datasets
 
 Hay que bajar las **fotos originales**, no esqueletos ya renderizados. El `archive/` que está en el
 proyecto contiene esqueletos pre-renderizados: **no sirve** para este pipeline (`prepare_dataset.py`
@@ -231,7 +273,7 @@ normaliza los nombres de clase a minúsculas.
 
 ---
 
-## 8. El pipeline: cuatro pasos
+## 9. El pipeline: cuatro pasos
 
 ```bash
 # 1. Landmarks desde las fotos originales (entorno de INFERENCIA — usa mediapipe)
@@ -293,7 +335,7 @@ Confirma que todo el circuito anda antes de gastar la corrida larga.
 
 ---
 
-## 9. Verificación — en orden de importancia
+## 10. Verificación — en orden de importancia
 
 1. **El contact sheet contra la ventana en vivo.** Correr `check_render.py`, abrir
    `docs/render-check.png`, y compararlo contra la ventana `AI View (Skeleton)` del traductor.
@@ -327,7 +369,7 @@ Confirma que todo el circuito anda antes de gastar la corrida larga.
 
 ---
 
-## 10. Trampas conocidas (ya resueltas — no reintroducir)
+## 11. Trampas conocidas (ya resueltas — no reintroducir)
 
 ### `BatchNormalization(momentum=0.99)` colapsa el modelo
 
@@ -360,7 +402,7 @@ problema de raíz, pero igual conviene tener el proyecto fuera de cualquier carp
 
 ---
 
-## 11. Qué esperar de los números
+## 12. Qué esperar de los números
 
 **No esperar 97.9%.** Ese número venía de fuga de datos. `evaluate.py` devuelve dos accuracies y la
 brecha entre ellas es lo interesante:
@@ -376,15 +418,15 @@ no más épocas.
 
 ---
 
-## 12. Lo que falta
+## 13. Lo que falta
 
-1. **Correr el pipeline completo con datos reales** (§8).
+1. **Correr el pipeline completo con datos reales** (§9).
 2. **Actualizar el README con las métricas reales.** Ahora mismo el README describe el diseño y
    explica cómo leer los resultados, pero **no afirma ningún porcentaje**, a propósito: no había
    modelo entrenado que los respaldara. Al terminar el paso 4, agregar los dos números.
 3. **Reemplazar `asl_cnn_model.onnx`** (lo hace `export_onnx.py`) y confirmar que `class_names.txt`
    quedó con 26 clases (lo reescribe `train_model.py`).
-4. **Calibrar los umbrales de J/Z** contra una mano real (§9.7).
+4. **Calibrar los umbrales de J/Z** contra una mano real (§10, punto 7).
 5. **Considerar borrar `asl_cnn_model.h5`** del repo: es el modelo viejo de 36 clases en formato
    legacy de Keras, ya sin nada que lo use. Está rastreado en git.
 6. **Regenerar `arquitectura_3d.png` / `infografia_educativa.png`** si se usan para la presentación.
@@ -393,7 +435,7 @@ no más épocas.
 
 ---
 
-## 13. Decisiones ya tomadas — no re-litigar
+## 14. Decisiones ya tomadas — no re-litigar
 
 El usuario las eligió explícitamente en la sesión anterior:
 
@@ -412,7 +454,7 @@ El usuario las eligió explícitamente en la sesión anterior:
 
 ---
 
-## 14. Referencia rápida de la API
+## 15. Referencia rápida de la API
 
 ```python
 import preprocessing as pp
@@ -460,7 +502,7 @@ Nombres estables, garantizados por `export_onnx.py`, que además empareja las sa
 
 ---
 
-## 15. Cómo se probó todo esto sin GPU ni datasets
+## 16. Cómo se probó todo esto sin GPU ni datasets
 
 Por si hace falta reproducir o extender las pruebas: se creó un venv aislado con `tensorflow-cpu`, se
 generó un `landmarks.npz` sintético (26 clases, deformación fija por clase más ruido, dos datasets

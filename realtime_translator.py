@@ -1,343 +1,359 @@
+"""Live ASL fingerspelling translator.
+
+Reads hand landmarks from the webcam, renders them through `preprocessing.render_skeleton()`
+— the exact function the model was trained on — and classifies the result. Stable letters
+accumulate into a word buffer, and the two dynamic letters are resolved by `motion.py`.
+
+    python realtime_translator.py
+    python realtime_translator.py --activations     # filter mosaic + neuron grid
+    python realtime_translator.py --debug-motion    # live J/Z trajectory readout
+
+Keys: q quit · space · backspace · c clear · r repeat last letter
+"""
+
+import argparse
+import os
+
 import cv2
 import mediapipe as mp
 import numpy as np
 import onnxruntime as ort
-import os
-from mediapipe.framework.formats import landmark_pb2
 
-def normalize_hand_landmarks(hand_landmarks):
-    xs = [lm.x for lm in hand_landmarks.landmark]
-    ys = [lm.y for lm in hand_landmarks.landmark]
+import preprocessing as pp
+from motion import MotionTracker
 
-    min_x, max_x = min(xs), max(xs)
-    min_y, max_y = min(ys), max(ys)
+# Outputs written by export_onnx.py. A model exported any other way still runs; the
+# extra visualisation panels are simply unavailable.
+LOGITS = "logits"
+CONV_TAP = "conv1_relu"
+DENSE_TAP = "dense_features"
 
-    width = max_x - min_x
-    height = max_y - min_y
+CONFIDENCE_FLOOR = 0.50      # below this the reading is reported as uncertain
+COMMIT_CONFIDENCE = 0.75     # and this much is needed to append a letter
+COMMIT_FRAMES = 10           # consecutive agreeing frames before committing
+SMOOTHING_WINDOW = 8         # rolling average over recent probability vectors
+LANDMARK_ALPHA = 0.35        # exponential smoothing on the landmarks themselves
 
-    center_x = min_x + width / 2
-    center_y = min_y + height / 2
 
-    # Hand fills ~70% of the canvas, matching the training preprocessing
-    box_size = max(width, height) / 0.7
-    if box_size == 0:
-        box_size = 1.0
+class SpellingBuffer:
+    """Turns a stream of per-frame guesses into typed text.
 
-    normalized_landmarks = landmark_pb2.NormalizedLandmarkList()
+    A letter is committed once it has been the top prediction for COMMIT_FRAMES frames
+    in a row while the hand is still. The same letter will not be committed twice in a
+    row — otherwise a hand held steady would spray repeats — so double letters need the
+    'r' key, or a brief move away and back.
+    """
 
-    for lm in hand_landmarks.landmark:
-        new_lm = normalized_landmarks.landmark.add()
-        new_lm.x = (lm.x - (center_x - box_size / 2)) / box_size
-        new_lm.y = (lm.y - (center_y - box_size / 2)) / box_size
-        new_lm.z = lm.z
+    def __init__(self):
+        self.text = ""
+        self._candidate = None
+        self._streak = 0
+        self._last_committed = None
 
-    return normalized_landmarks
+    def update(self, letter, confidence, hand_present, moving):
+        if not hand_present:
+            self._candidate = None
+            self._streak = 0
+            self._last_committed = None
+            return None
+
+        if moving:
+            # Mid-gesture frames are meaningless for a static classifier.
+            self._streak = 0
+            return None
+
+        if letter != self._candidate:
+            self._candidate = letter
+            self._streak = 1
+            if letter != self._last_committed:
+                self._last_committed = None
+        else:
+            self._streak += 1
+
+        if (self._streak == COMMIT_FRAMES and confidence >= COMMIT_CONFIDENCE
+                and letter != self._last_committed):
+            self.text += letter.upper()
+            self._last_committed = letter
+            return letter
+        return None
+
+    def progress(self):
+        return min(self._streak / COMMIT_FRAMES, 1.0)
+
+    def repeat(self):
+        if self.text and self.text[-1] != " ":
+            self.text += self.text[-1]
+
+    def space(self):
+        if self.text and not self.text.endswith(" "):
+            self.text += " "
+        self._last_committed = None
+
+    def backspace(self):
+        self.text = self.text[:-1]
+        self._last_committed = None
+
+    def clear(self):
+        self.text = ""
+        self._last_committed = None
+
+
+def load_session(path):
+    if not os.path.exists(path):
+        raise SystemExit(f"Error: '{path}' not found. Run this script from the project root.")
+
+    session = ort.InferenceSession(path)
+    names = [o.name for o in session.get_outputs()]
+    input_meta = session.get_inputs()[0]
+    size = input_meta.shape[1]
+    if not isinstance(size, int):
+        size = pp.MODEL_INPUT_SIZE
+
+    taps = CONV_TAP in names and DENSE_TAP in names
+    if not taps:
+        print("Note: this model has no named activation taps, so the visualiser panels")
+        print("      are disabled. Re-export with export_onnx.py to enable them.")
+
+    return session, input_meta.name, size, names, taps
+
+
+def draw_activation_mosaic(activations, grid=(4, 8), scale=3):
+    height, width, filters = activations.shape
+    rows, cols = grid
+    mosaic = np.zeros((height * rows, width * cols), dtype=np.uint8)
+
+    for i in range(min(filters, rows * cols)):
+        feature = activations[:, :, i].copy()
+        # Convolution padding lights up the border regardless of the input; blanking it
+        # keeps the normalisation below from being dominated by an artefact.
+        feature[:2, :] = feature[-2:, :] = 0
+        feature[:, :2] = feature[:, -2:] = 0
+
+        low, high = feature.min(), feature.max()
+        cell = ((feature - low) / (high - low) * 255).astype(np.uint8) if high > low \
+            else np.zeros_like(feature, dtype=np.uint8)
+
+        r, c = divmod(i, cols)
+        mosaic[r * height:(r + 1) * height, c * width:(c + 1) * width] = cell
+
+    return cv2.resize(mosaic, (mosaic.shape[1] * scale, mosaic.shape[0] * scale),
+                      interpolation=cv2.INTER_NEAREST)
+
+
+def draw_neuron_panel(dense, scores, class_names, active):
+    canvas = np.zeros((400, 300, 3), dtype=np.uint8)
+    label_color = (255, 255, 255) if active else (128, 128, 128)
+    cv2.putText(canvas, "Hidden Layer (128 Neurons)", (15, 25),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, label_color, 1, cv2.LINE_AA)
+
+    cell, gap, x0, y0 = 12, 3, 30, 40
+    if active and dense is not None:
+        low, high = dense.min(), dense.max()
+        span = high - low if high > low else 1.0
+
+    for i in range(128):
+        r, c = divmod(i, 16)
+        x1, y1 = x0 + c * (cell + gap), y0 + r * (cell + gap)
+        if active and dense is not None:
+            value = int((dense[i] - low) / span * 255)
+            color = (value, value, 0)
+        else:
+            color = (20, 20, 20)
+        cv2.rectangle(canvas, (x1, y1), (x1 + cell, y1 + cell), color, -1)
+        cv2.rectangle(canvas, (x1, y1), (x1 + cell, y1 + cell), (0, 0, 0), 1)
+
+    if not active:
+        cv2.putText(canvas, "Waiting for input...", (15, 190),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (128, 128, 128), 1, cv2.LINE_AA)
+        return canvas
+
+    cv2.putText(canvas, "AI Decision (Top 3)", (15, 190),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+
+    for rank, idx in enumerate(np.argsort(scores)[::-1][:3]):
+        probability = scores[idx]
+        y = 210 + rank * 40
+        cv2.putText(canvas, f"{class_names[idx].upper()}: {probability * 100:.1f}%", (15, y + 15),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+        color = (0, 255, 0) if rank == 0 and probability > 0.5 else (128, 128, 128)
+        cv2.rectangle(canvas, (130, y), (130 + int(probability * 120), y + 20), color, -1)
+        cv2.rectangle(canvas, (130, y), (250, y + 20), (255, 255, 255), 1)
+
+    return canvas
+
+
+def draw_hud(image, reading, buffer, progress, debug_lines):
+    h, w = image.shape[:2]
+    cv2.rectangle(image, (0, 0), (w, 60), (0, 0, 0), -1)
+    cv2.putText(image, reading, (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2, cv2.LINE_AA)
+
+    # Progress toward committing the current letter.
+    if progress > 0:
+        cv2.rectangle(image, (0, 58), (int(w * progress), 60), (0, 200, 255), -1)
+
+    cv2.rectangle(image, (0, h - 70), (w, h), (0, 0, 0), -1)
+    text = buffer.text[-28:] if len(buffer.text) > 28 else buffer.text
+    cv2.putText(image, text or "-", (20, h - 32), cv2.FONT_HERSHEY_SIMPLEX, 0.9,
+                (255, 255, 255), 2, cv2.LINE_AA)
+    cv2.putText(image, "q quit  space  backspace  c clear  r repeat", (20, h - 10),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.4, (150, 150, 150), 1, cv2.LINE_AA)
+
+    for i, line in enumerate(debug_lines):
+        cv2.putText(image, line, (w - 250, 80 + i * 18), cv2.FONT_HERSHEY_SIMPLEX, 0.45,
+                    (0, 255, 255), 1, cv2.LINE_AA)
+
 
 def main():
-    if not os.path.exists('class_names.txt'):
-        print("Error: 'class_names.txt' not found. Run this script from the project root.")
-        return
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--model", default="asl_cnn_model.onnx")
+    parser.add_argument("--classes", default="class_names.txt")
+    parser.add_argument("--camera", type=int, default=0)
+    parser.add_argument("--activations", action="store_true", help="Show the filter mosaic and neuron grid")
+    parser.add_argument("--debug-motion", action="store_true", help="Overlay the J/Z trajectory measurements")
+    args = parser.parse_args()
 
-    with open('class_names.txt', 'r') as f:
-        class_names = f.read().split(',')
+    if not os.path.exists(args.classes):
+        raise SystemExit(f"Error: '{args.classes}' not found. Run this script from the project root.")
+    class_names = open(args.classes).read().strip().split(",")
 
-    if not os.path.exists('asl_cnn_model.onnx'):
-        print("Error: 'asl_cnn_model.onnx' not found. Run this script from the project root.")
-        return
+    session, input_name, size, output_names, has_taps = load_session(args.model)
+    print(f"Model: {args.model} | input {size}x{size} | {len(class_names)} classes")
 
-    print("Loading the ONNX model (starts instantly)...")
-    import onnx
-    try:
-        onnx_model = onnx.load('asl_cnn_model.onnx')
+    show_panels = args.activations and has_taps
+    wanted = [LOGITS] if LOGITS in output_names else [output_names[0]]
+    if show_panels:
+        wanted += [CONV_TAP, DENSE_TAP]
 
-        # Expose the first convolutional layer's output and the dense layer's
-        # output, so the activation mosaic and neuron grid can read them.
-        activation_tensor_name = 'sequential_1/conv2d_1/Relu:0'
-        intermediate_layer_value_info = onnx.helper.ValueInfoProto()
-        intermediate_layer_value_info.name = activation_tensor_name
-        onnx_model.graph.output.append(intermediate_layer_value_info)
+    capture = cv2.VideoCapture(args.camera)
+    if not capture.isOpened():
+        raise SystemExit("Error: could not access the webcam.")
 
-        dense_tensor_name = 'sequential_1/dense_1/Relu:0'
-        dense_layer_value_info = onnx.helper.ValueInfoProto()
-        dense_layer_value_info.name = dense_tensor_name
-        onnx_model.graph.output.append(dense_layer_value_info)
+    buffer = SpellingBuffer()
+    tracker = MotionTracker()
+    score_history = []
+    previous = None
 
-        ort_sess = ort.InferenceSession(onnx_model.SerializeToString())
-    except Exception as e:
-        print(f"Error loading the ONNX model: {e}")
-        return
-
-    # Must match the canvas size used during training
-    img_height = 64
-    img_width = 64
-
-    mp_drawing = mp.solutions.drawing_utils
-    mp_drawing_styles = mp.solutions.drawing_styles
     mp_hands = mp.solutions.hands
-
-    cap = cv2.VideoCapture(0)
-    if not cap.isOpened():
-        print("Error: could not access the webcam.")
-        return
-
     print("\n--- STARTING TRANSLATOR ---")
     print("Place your hand in front of the camera. Press 'q' to quit.")
 
-    input_name = ort_sess.get_inputs()[0].name
+    with mp_hands.Hands(model_complexity=pp.HAND_MODEL_COMPLEXITY,
+                        max_num_hands=1,
+                        min_detection_confidence=0.5,
+                        min_tracking_confidence=0.5) as hands:
 
-    # Rolling average over the last N predictions, so the displayed letter
-    # doesn't flicker between classes frame to frame.
-    history_len = 8
-    score_history = []
-
-    # Exponential moving average on the hand landmarks, so the skeleton
-    # doesn't jitter with MediaPipe's per-frame noise.
-    previous_landmarks = None
-    alpha = 0.35  # lower = smoother/slower, higher = more responsive
-
-    with mp_hands.Hands(
-        model_complexity=0,
-        min_detection_confidence=0.5,
-        min_tracking_confidence=0.5) as hands:
-
-        while cap.isOpened():
-            success, image = cap.read()
-            if not success:
-                print("No frame received from the camera. Skipping...")
+        while capture.isOpened():
+            ok, frame = capture.read()
+            if not ok:
                 continue
 
-            # Mirror the feed for a more natural view
-            image = cv2.flip(image, 1)
+            frame = cv2.flip(frame, 1)
+            frame.flags.writeable = False
+            results = hands.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+            frame.flags.writeable = True
 
-            image.flags.writeable = False
-            image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-            results = hands.process(image_rgb)
-            image.flags.writeable = True
-
-            h, w, c = image.shape
-
-            black_canvas = np.zeros((h, w, 3), dtype=np.uint8)
-            # Normalized 400x400 canvas fed to the model
-            ia_canvas = np.zeros((400, 400, 3), dtype=np.uint8)
-            prediction_label = "Looking for a hand..."
+            h, w = frame.shape[:2]
+            skeleton_rgb = np.zeros((size, size, 3), dtype=np.uint8)
+            reading = "Looking for a hand..."
+            dense = None
+            scores = None
+            debug_lines = []
 
             if results.multi_hand_landmarks:
-                # Only the first detected hand is processed, for stability
-                hand_landmarks = results.multi_hand_landmarks[0]
+                landmarks = results.multi_hand_landmarks[0]
 
-                if previous_landmarks is not None:
-                    for i in range(21):
-                        curr_lm = hand_landmarks.landmark[i]
-                        prev_lm = previous_landmarks[i]
+                # Exponential smoothing on the raw landmarks, so the skeleton does not
+                # jitter with MediaPipe's per-frame noise.
+                points_px = pp.landmarks_to_pixels(landmarks, w, h)
+                if previous is not None:
+                    points_px = LANDMARK_ALPHA * points_px + (1 - LANDMARK_ALPHA) * previous
+                previous = points_px
 
-                        curr_lm.x = alpha * curr_lm.x + (1 - alpha) * prev_lm[0]
-                        curr_lm.y = alpha * curr_lm.y + (1 - alpha) * prev_lm[1]
-                        curr_lm.z = alpha * curr_lm.z + (1 - alpha) * prev_lm[2]
+                tracker.update(points_px)
+                normalized = pp.normalize_landmarks(points_px)
+                skeleton_rgb = pp.render_skeleton(normalized, size=size)
 
-                previous_landmarks = [[lm.x, lm.y, lm.z] for lm in hand_landmarks.landmark]
+                outputs = session.run(wanted, {input_name: pp.model_input(skeleton_rgb)})
+                logits = outputs[0][0]
+                if show_panels:
+                    dense = outputs[2][0]
 
-                normalized_hand = normalize_hand_landmarks(hand_landmarks)
-
-                mp_drawing.draw_landmarks(
-                    ia_canvas,
-                    normalized_hand,
-                    mp_hands.HAND_CONNECTIONS,
-                    mp_drawing_styles.get_default_hand_landmarks_style(),
-                    mp_drawing_styles.get_default_hand_connections_style())
-
-                mp_drawing.draw_landmarks(
-                    black_canvas,
-                    hand_landmarks,
-                    mp_hands.HAND_CONNECTIONS,
-                    mp_drawing_styles.get_default_hand_landmarks_style(),
-                    mp_drawing_styles.get_default_hand_connections_style())
-
-                mp_drawing.draw_landmarks(
-                    image,
-                    hand_landmarks,
-                    mp_hands.HAND_CONNECTIONS,
-                    mp_drawing_styles.get_default_hand_landmarks_style(),
-                    mp_drawing_styles.get_default_hand_connections_style())
-
-                # Bounding box on the raw feed, matching the crop the model sees
-                xs = [lm.x for lm in hand_landmarks.landmark]
-                ys = [lm.y for lm in hand_landmarks.landmark]
-                min_x, max_x = min(xs), max(xs)
-                min_y, max_y = min(ys), max(ys)
-                width = max_x - min_x
-                height = max_y - min_y
-                center_x = min_x + width / 2
-                center_y = min_y + height / 2
-                box_size = max(width, height) / 0.7
-
-                x1_box = int((center_x - box_size / 2) * w)
-                y1_box = int((center_y - box_size / 2) * h)
-                x2_box = int((center_x + box_size / 2) * w)
-                y2_box = int((center_y + box_size / 2) * h)
-
-                cv2.rectangle(image, (x1_box, y1_box), (x2_box, y2_box), (255, 0, 255), 2)
-                cv2.putText(image, "AI FOCUS", (x1_box + 5, y1_box + 20),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 255), 1, cv2.LINE_AA)
-
-                resized_canvas = cv2.resize(ia_canvas, (img_width, img_height))
-
-                # Keras keeps the layers.Rescaling(1./255) step inside the model,
-                # so the ONNX graph expects raw float32 pixels in the 0-255 range.
-                input_data = np.expand_dims(resized_canvas.astype(np.float32), axis=0)
-
-                # outputs: [0] final logits, [1] conv layer activations, [2] dense layer (128 neurons)
-                outputs = ort_sess.run(None, {input_name: input_data})
-                predictions = outputs[0][0]
-
-                activations = outputs[1][0]
-                act_h, act_w, num_filters = activations.shape
-
-                grid_h, grid_w = 4, 8
-                mosaic = np.zeros((act_h * grid_h, act_w * grid_w), dtype=np.uint8)
-
-                for i in range(min(num_filters, grid_h * grid_w)):
-                    row = i // grid_w
-                    col = i % grid_w
-                    feature_map = activations[:, :, i].copy()
-                    # Strip the convolution's padding artifacts at the edges
-                    feature_map[0:2, :] = 0
-                    feature_map[-2:, :] = 0
-                    feature_map[:, 0:2] = 0
-                    feature_map[:, -2:] = 0
-
-                    f_min, f_max = feature_map.min(), feature_map.max()
-                    if f_max > f_min:
-                        normalized = ((feature_map - f_min) / (f_max - f_min) * 255).astype(np.uint8)
-                    else:
-                        normalized = np.zeros_like(feature_map, dtype=np.uint8)
-
-                    y_start = row * act_h
-                    y_end = y_start + act_h
-                    x_start = col * act_w
-                    x_end = x_start + act_w
-                    mosaic[y_start:y_end, x_start:x_end] = normalized
-
-                mosaic_resized = cv2.resize(mosaic, (mosaic.shape[1] * 2, mosaic.shape[0] * 2), interpolation=cv2.INTER_NEAREST)
-                cv2.imshow('AI Filters', mosaic_resized)
-
-                dense_activations = outputs[2][0]
-
-                # Softmax computed manually: the ONNX graph outputs raw logits
-                exp_preds = np.exp(predictions - np.max(predictions))
-                score = exp_preds / exp_preds.sum()
-
-                score_history.append(score)
-                if len(score_history) > history_len:
+                # The graph emits raw logits; softmax happens here.
+                exponentials = np.exp(logits - logits.max())
+                score_history.append(exponentials / exponentials.sum())
+                if len(score_history) > SMOOTHING_WINDOW:
                     score_history.pop(0)
 
-                avg_scores = np.mean(score_history, axis=0)
-                predicted_class = class_names[np.argmax(avg_scores)]
-                confidence = 100 * np.max(avg_scores)
+                scores = np.mean(score_history, axis=0)
+                letter = class_names[int(np.argmax(scores))]
+                confidence = float(scores.max())
 
-                if confidence > 50:
-                    prediction_label = f"Sign: {predicted_class.upper()} ({confidence:.1f}%)"
+                resolved = tracker.classify(letter)
+                if resolved and resolved in class_names:
+                    letter = resolved
+
+                moving = tracker.is_moving()
+                buffer.update(letter, confidence, True, moving)
+
+                if confidence > CONFIDENCE_FLOOR:
+                    reading = f"Sign: {letter.upper()} ({confidence * 100:.1f}%)"
+                    if moving:
+                        reading += "  [moving]"
                 else:
-                    prediction_label = "Not sure..."
+                    reading = "Not sure..."
 
-                decision_canvas = np.zeros((400, 300, 3), dtype=np.uint8)
+                if args.debug_motion:
+                    debug_lines = tracker.debug_lines(letter)
 
-                cv2.putText(decision_canvas, "Hidden Layer (128 Neurons)", (15, 25),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+                # Draw the hand and the region the model actually sees.
+                mp.solutions.drawing_utils.draw_landmarks(
+                    frame, landmarks, mp_hands.HAND_CONNECTIONS,
+                    mp.solutions.drawing_styles.get_default_hand_landmarks_style(),
+                    mp.solutions.drawing_styles.get_default_hand_connections_style())
 
-                d_min, d_max = dense_activations.min(), dense_activations.max()
-                d_span = d_max - d_min if d_max > d_min else 1.0
+                extent = points_px.max(axis=0) - points_px.min(axis=0)
+                box = extent.max() / pp.HAND_FILL
+                centre = points_px.min(axis=0) + extent / 2
+                x1, y1 = (centre - box / 2).astype(int)
+                x2, y2 = (centre + box / 2).astype(int)
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 255), 2)
+                cv2.putText(frame, "AI FOCUS", (x1 + 5, y1 + 20),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 255), 1, cv2.LINE_AA)
 
-                cell_size = 12
-                gap = 3
-                grid_start_x = 30
-                grid_start_y = 40
-
-                for i in range(128):
-                    row = i // 16
-                    col = i % 16
-                    val = dense_activations[i]
-                    norm_val = int((val - d_min) / d_span * 255)
-                    color = (norm_val, norm_val, 0)
-
-                    x1 = grid_start_x + col * (cell_size + gap)
-                    y1 = grid_start_y + row * (cell_size + gap)
-                    x2 = x1 + cell_size
-                    y2 = y1 + cell_size
-
-                    cv2.rectangle(decision_canvas, (x1, y1), (x2, y2), color, -1)
-                    cv2.rectangle(decision_canvas, (x1, y1), (x2, y2), (0, 0, 0), 1)
-
-                cv2.putText(decision_canvas, "AI Decision (Top 3)", (15, 190),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
-
-                top_indices = np.argsort(avg_scores)[::-1][:3]
-
-                bar_y_start = 210
-                bar_height = 20
-                bar_gap = 40
-
-                for rank, idx in enumerate(top_indices):
-                    prob = avg_scores[idx]
-                    label = class_names[idx].upper()
-
-                    text = f"{label}: {prob*100:.1f}%"
-                    y_text = bar_y_start + rank * bar_gap + 15
-                    cv2.putText(decision_canvas, text, (15, y_text),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
-
-                    bar_w = int(prob * 120)
-                    x_bar_start = 130
-                    y_bar_start = bar_y_start + rank * bar_gap
-                    x_bar_end = x_bar_start + bar_w
-                    y_bar_end = y_bar_start + bar_height
-
-                    # Green for a confident top guess, gray otherwise
-                    bar_color = (0, 255, 0) if rank == 0 and prob > 0.5 else (128, 128, 128)
-                    cv2.rectangle(decision_canvas, (x_bar_start, y_bar_start), (x_bar_end, y_bar_end), bar_color, -1)
-                    cv2.rectangle(decision_canvas, (x_bar_start, y_bar_start), (x_bar_start + 120, y_bar_end), (255, 255, 255), 1)
-
-                cv2.imshow('Decision Neurons', decision_canvas)
+                if show_panels:
+                    cv2.imshow("AI Filters", draw_activation_mosaic(outputs[1][0]))
             else:
-                # Clear the smoothing state so a lost hand doesn't bias the next one
                 score_history.clear()
-                previous_landmarks = None
-                prediction_label = "Looking for a hand..."
+                previous = None
+                tracker.reset()
+                buffer.update(None, 0.0, False, False)
 
-                decision_canvas = np.zeros((400, 300, 3), dtype=np.uint8)
-                cv2.putText(decision_canvas, "Hidden Layer (128 Neurons)", (15, 25),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (128, 128, 128), 1, cv2.LINE_AA)
+            if show_panels:
+                cv2.imshow("Decision Neurons",
+                           draw_neuron_panel(dense, scores, class_names, scores is not None))
 
-                cell_size = 12
-                gap = 3
-                grid_start_x = 30
-                grid_start_y = 40
+            draw_hud(frame, reading, buffer, buffer.progress(), debug_lines)
+            cv2.imshow("ASL Translator", frame)
+            # render_skeleton returns RGB; OpenCV windows expect BGR.
+            cv2.imshow("AI View (Skeleton)", cv2.cvtColor(skeleton_rgb, cv2.COLOR_RGB2BGR))
 
-                for i in range(128):
-                    row = i // 16
-                    col = i % 16
-                    x1 = grid_start_x + col * (cell_size + gap)
-                    y1 = grid_start_y + row * (cell_size + gap)
-                    x2 = x1 + cell_size
-                    y2 = y1 + cell_size
-                    cv2.rectangle(decision_canvas, (x1, y1), (x2, y2), (20, 20, 20), -1)
-                    cv2.rectangle(decision_canvas, (x1, y1), (x2, y2), (0, 0, 0), 1)
-
-                cv2.putText(decision_canvas, "Waiting for input...", (15, 190),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (128, 128, 128), 1, cv2.LINE_AA)
-                cv2.imshow('Decision Neurons', decision_canvas)
-
-            cv2.rectangle(image, (0, 0), (w, 60), (0, 0, 0), -1)
-            cv2.putText(image, prediction_label, (20, 40),
-                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2, cv2.LINE_AA)
-
-            cv2.imshow('ASL Translator', image)
-            cv2.imshow('AI View (Skeleton)', ia_canvas)
-
-            if cv2.waitKey(5) & 0xFF == ord('q'):
+            key = cv2.waitKey(5) & 0xFF
+            if key == ord("q"):
                 break
+            elif key == ord(" "):
+                buffer.space()
+            elif key in (8, 127):
+                buffer.backspace()
+            elif key == ord("c"):
+                buffer.clear()
+            elif key == ord("r"):
+                buffer.repeat()
 
-    cap.release()
+    capture.release()
     cv2.destroyAllWindows()
+    if buffer.text:
+        print(f"\nTyped: {buffer.text}")
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()

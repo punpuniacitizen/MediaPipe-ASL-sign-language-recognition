@@ -1,6 +1,18 @@
+# Live translation, and the one-off MediaPipe pass in prepare_dataset.py.
+#
+# Install this in a SEPARATE environment from requirements-train.txt. MediaPipe 0.10
+# pins protobuf<5 while current TensorFlow requires >=5.28, so the two cannot coexist.
+# Nothing here is needed to train, and nothing there is needed to run the translator:
+# preprocessing.py depends only on OpenCV and NumPy, so both sides render skeletons
+# identically from whichever environment they happen to be in.
+
 opencv-python
-mediapipe
-tensorflow
-matplotlib
-scikit-learn
-pandas
+
+# 1.0 deleted the mediapipe.solutions API that the Hands detector lives in, with no
+# drop-in replacement, so this upper bound is load-bearing rather than precautionary.
+mediapipe>=0.10.21,<1.0
+
+# Required by mediapipe 0.10 itself.
+numpy<2
+
+onnxruntime

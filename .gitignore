@@ -4,15 +4,21 @@ venv312/
 
 # Dataset y cachés de entrenamiento
 archive/
+datasets/
 train_db_cache/
 val_db_cache/
 
-# Scripts y assets que se quedan fuera del repo público
-train_model.py
+# Artefactos que produce el pipeline: se regeneran corriendo los scripts
+landmarks.npz
+split.npz
+training_history.json
+*.keras
+grafica_entrenamiento.png
+
+# Assets locales de presentación
 generar_arquitectura.py
 generar_infografia.py
 arquitectura_3d.png
-grafica_entrenamiento.png
 infografia_educativa.png
 
 __pycache__/

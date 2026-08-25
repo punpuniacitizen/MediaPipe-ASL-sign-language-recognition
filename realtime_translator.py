@@ -8,11 +8,16 @@ accumulate into a word buffer, and the two dynamic letters are resolved by `moti
     python realtime_translator.py --activations     # filter mosaic + neuron grid
     python realtime_translator.py --debug-motion    # live J/Z trajectory readout
 
+Everything is composited into a single window by `ui.py`, rather than the four separate
+OS windows earlier versions opened.
+
 Keys: q quit · space · backspace · c clear · r repeat last letter
 """
 
 import argparse
 import os
+import time
+from collections import deque
 
 import cv2
 import mediapipe as mp
@@ -20,7 +25,10 @@ import numpy as np
 import onnxruntime as ort
 
 import preprocessing as pp
+import ui
 from motion import MotionTracker
+
+WINDOW = "ASL Translator"
 
 # Outputs written by export_onnx.py. A model exported any other way still runs; the
 # extra visualisation panels are simply unavailable.
@@ -117,92 +125,6 @@ def load_session(path):
     return session, input_meta.name, size, names, taps
 
 
-def draw_activation_mosaic(activations, grid=(4, 8), scale=3):
-    height, width, filters = activations.shape
-    rows, cols = grid
-    mosaic = np.zeros((height * rows, width * cols), dtype=np.uint8)
-
-    for i in range(min(filters, rows * cols)):
-        feature = activations[:, :, i].copy()
-        # Convolution padding lights up the border regardless of the input; blanking it
-        # keeps the normalisation below from being dominated by an artefact.
-        feature[:2, :] = feature[-2:, :] = 0
-        feature[:, :2] = feature[:, -2:] = 0
-
-        low, high = feature.min(), feature.max()
-        cell = ((feature - low) / (high - low) * 255).astype(np.uint8) if high > low \
-            else np.zeros_like(feature, dtype=np.uint8)
-
-        r, c = divmod(i, cols)
-        mosaic[r * height:(r + 1) * height, c * width:(c + 1) * width] = cell
-
-    return cv2.resize(mosaic, (mosaic.shape[1] * scale, mosaic.shape[0] * scale),
-                      interpolation=cv2.INTER_NEAREST)
-
-
-def draw_neuron_panel(dense, scores, class_names, active):
-    canvas = np.zeros((400, 300, 3), dtype=np.uint8)
-    label_color = (255, 255, 255) if active else (128, 128, 128)
-    cv2.putText(canvas, "Hidden Layer (128 Neurons)", (15, 25),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.5, label_color, 1, cv2.LINE_AA)
-
-    cell, gap, x0, y0 = 12, 3, 30, 40
-    if active and dense is not None:
-        low, high = dense.min(), dense.max()
-        span = high - low if high > low else 1.0
-
-    for i in range(128):
-        r, c = divmod(i, 16)
-        x1, y1 = x0 + c * (cell + gap), y0 + r * (cell + gap)
-        if active and dense is not None:
-            value = int((dense[i] - low) / span * 255)
-            color = (value, value, 0)
-        else:
-            color = (20, 20, 20)
-        cv2.rectangle(canvas, (x1, y1), (x1 + cell, y1 + cell), color, -1)
-        cv2.rectangle(canvas, (x1, y1), (x1 + cell, y1 + cell), (0, 0, 0), 1)
-
-    if not active:
-        cv2.putText(canvas, "Waiting for input...", (15, 190),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (128, 128, 128), 1, cv2.LINE_AA)
-        return canvas
-
-    cv2.putText(canvas, "AI Decision (Top 3)", (15, 190),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
-
-    for rank, idx in enumerate(np.argsort(scores)[::-1][:3]):
-        probability = scores[idx]
-        y = 210 + rank * 40
-        cv2.putText(canvas, f"{class_names[idx].upper()}: {probability * 100:.1f}%", (15, y + 15),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
-        color = (0, 255, 0) if rank == 0 and probability > 0.5 else (128, 128, 128)
-        cv2.rectangle(canvas, (130, y), (130 + int(probability * 120), y + 20), color, -1)
-        cv2.rectangle(canvas, (130, y), (250, y + 20), (255, 255, 255), 1)
-
-    return canvas
-
-
-def draw_hud(image, reading, buffer, progress, debug_lines):
-    h, w = image.shape[:2]
-    cv2.rectangle(image, (0, 0), (w, 60), (0, 0, 0), -1)
-    cv2.putText(image, reading, (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2, cv2.LINE_AA)
-
-    # Progress toward committing the current letter.
-    if progress > 0:
-        cv2.rectangle(image, (0, 58), (int(w * progress), 60), (0, 200, 255), -1)
-
-    cv2.rectangle(image, (0, h - 70), (w, h), (0, 0, 0), -1)
-    text = buffer.text[-28:] if len(buffer.text) > 28 else buffer.text
-    cv2.putText(image, text or "-", (20, h - 32), cv2.FONT_HERSHEY_SIMPLEX, 0.9,
-                (255, 255, 255), 2, cv2.LINE_AA)
-    cv2.putText(image, "q quit  space  backspace  c clear  r repeat", (20, h - 10),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.4, (150, 150, 150), 1, cv2.LINE_AA)
-
-    for i, line in enumerate(debug_lines):
-        cv2.putText(image, line, (w - 250, 80 + i * 18), cv2.FONT_HERSHEY_SIMPLEX, 0.45,
-                    (0, 255, 255), 1, cv2.LINE_AA)
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--model", default="asl_cnn_model.onnx")
@@ -230,8 +152,14 @@ def main():
 
     buffer = SpellingBuffer()
     tracker = MotionTracker()
+    layout = ui.Layout(show_vis=show_panels)
     score_history = []
     previous = None
+    frame_times = deque(maxlen=30)
+
+    # WINDOW_GUI_NORMAL suppresses the toolbar and status bar that OpenCV's Qt backend
+    # adds by default on Linux builds; the interface is composited here, not by Qt.
+    cv2.namedWindow(WINDOW, cv2.WINDOW_AUTOSIZE | cv2.WINDOW_GUI_NORMAL)
 
     mp_hands = mp.solutions.hands
     print("\n--- STARTING TRANSLATOR ---")
@@ -253,11 +181,7 @@ def main():
             frame.flags.writeable = True
 
             h, w = frame.shape[:2]
-            skeleton_rgb = np.zeros((size, size, 3), dtype=np.uint8)
-            reading = "Looking for a hand..."
-            dense = None
-            scores = None
-            debug_lines = []
+            state = ui.ViewState(class_names=class_names, text=buffer.text)
 
             if results.multi_hand_landmarks:
                 landmarks = results.multi_hand_landmarks[0]
@@ -275,8 +199,6 @@ def main():
 
                 outputs = session.run(wanted, {input_name: pp.model_input(skeleton_rgb)})
                 logits = outputs[0][0]
-                if show_panels:
-                    dense = outputs[2][0]
 
                 # The graph emits raw logits; softmax happens here.
                 exponentials = np.exp(logits - logits.max())
@@ -295,16 +217,6 @@ def main():
                 moving = tracker.is_moving()
                 buffer.update(letter, confidence, True, moving)
 
-                if confidence > CONFIDENCE_FLOOR:
-                    reading = f"Sign: {letter.upper()} ({confidence * 100:.1f}%)"
-                    if moving:
-                        reading += "  [moving]"
-                else:
-                    reading = "Not sure..."
-
-                if args.debug_motion:
-                    debug_lines = tracker.debug_lines(letter)
-
                 # Draw the hand and the region the model actually sees.
                 mp.solutions.drawing_utils.draw_landmarks(
                     frame, landmarks, mp_hands.HAND_CONNECTIONS,
@@ -316,26 +228,37 @@ def main():
                 centre = points_px.min(axis=0) + extent / 2
                 x1, y1 = (centre - box / 2).astype(int)
                 x2, y2 = (centre + box / 2).astype(int)
-                cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 255), 2)
-                cv2.putText(frame, "AI FOCUS", (x1 + 5, y1 + 20),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 255), 1, cv2.LINE_AA)
+                cv2.rectangle(frame, (x1, y1), (x2, y2), ui.VIOLET, 2)
 
+                state.skeleton = cv2.cvtColor(skeleton_rgb, cv2.COLOR_RGB2BGR)
+                state.scores = scores
+                state.letter = letter
+                state.confidence = confidence
+                state.hand_present = True
+                state.moving = moving
+                state.uncertain = confidence <= CONFIDENCE_FLOOR
+                state.text = buffer.text
+                state.progress = buffer.progress()
                 if show_panels:
-                    cv2.imshow("AI Filters", draw_activation_mosaic(outputs[1][0]))
+                    state.conv = outputs[1][0]
+                    state.dense = outputs[2][0]
+                if args.debug_motion:
+                    state.debug = tracker.debug_lines(letter)
             else:
                 score_history.clear()
                 previous = None
                 tracker.reset()
                 buffer.update(None, 0.0, False, False)
+                state.text = buffer.text
 
-            if show_panels:
-                cv2.imshow("Decision Neurons",
-                           draw_neuron_panel(dense, scores, class_names, scores is not None))
+            now = time.perf_counter()
+            frame_times.append(now)
+            if len(frame_times) > 1:
+                span = frame_times[-1] - frame_times[0]
+                state.fps = (len(frame_times) - 1) / span if span > 0 else 0.0
 
-            draw_hud(frame, reading, buffer, buffer.progress(), debug_lines)
-            cv2.imshow("ASL Translator", frame)
-            # render_skeleton returns RGB; OpenCV windows expect BGR.
-            cv2.imshow("AI View (Skeleton)", cv2.cvtColor(skeleton_rgb, cv2.COLOR_RGB2BGR))
+            state.camera = frame
+            cv2.imshow(WINDOW, ui.compose(state, layout))
 
             key = cv2.waitKey(5) & 0xFF
             if key == ord("q"):

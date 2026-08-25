@@ -36,6 +36,8 @@ The styling stays deliberately plain — black background, OpenCV's default font
 
 `ui.py` holds no camera or model code, so the layout can be rendered from a synthetic state and checked as a PNG without a webcam.
 
+Two buttons in the bottom-right open secondary windows, drawn regions clicked via `cv2.setMouseCallback` rather than a native toolkit's widgets: **Filters (zoom)** pops the convolutional filter mosaic full-size — useful because 32 tiles read poorly at the size the inline column has room for — and works whether or not `--activations` is on, since the model always computes those activations when it has them; only the inline column is gated by the flag. **Reference** opens `docs/asl-alphabet-reference.png` (see `build_reference.py`) to sign against. Both toggle closed on a second click, and both notice if you close the popup with its own window control instead — `cv2.imshow` would otherwise silently recreate a window the user just closed, which is why `realtime_translator.Popup` polls `WND_PROP_VISIBLE` rather than trusting its own `open` flag alone.
+
 ### J and Z
 
 ASL's J and Z are movements, not poses. A frame-by-frame classifier can only ever see the handshape at the start or end of the gesture. `motion.py` watches the last 1.5 seconds of hand positions and checks whether the motion that should accompany a J-ish or Z-ish handshape is actually there — a descent and a hook for J, a zigzag with two corners for Z.
@@ -64,6 +66,8 @@ python realtime_translator.py
 ```
 
 Add `--activations` for the hidden-layer neuron grid, added under Top 3 in the same rail, and the convolutional filter mosaic, which gets a dedicated third column at full height. Both read named outputs off the ONNX graph, so they keep working across retrains. `--debug-motion` adds the live J/Z trajectory measurements, for tuning the thresholds in `motion.py`. Requires a webcam.
+
+The repo ships `docs/asl-alphabet-reference.png` too, which the **Reference** button opens — one rendered sign per letter to check your handshape against. Regenerate it with `python build_reference.py`: with `landmarks.npz` present it renders fresh through `preprocessing.render_skeleton()` at higher resolution; without it, it falls back to upscaling the tiles already in `docs/render-check.png`, which is what shipped this one.
 
 ## Two environments
 

@@ -40,10 +40,10 @@ _FALLBACKS = str.maketrans({
 
 @dataclass
 class Layout:
-    camera_w: int = 720
-    camera_h: int = 540
-    rail_w: int = 260
-    vis_w: int = 300
+    camera_w: int = 800
+    camera_h: int = 600
+    rail_w: int = 300
+    vis_w: int = 340
     bottom_h: int = 96
     pad: int = 12
     show_vis: bool = False
@@ -160,7 +160,7 @@ def draw_debug(canvas, lines, x, y):
     return y + DEBUG_LINE_H * len(lines) + 14
 
 
-FILTER_GRID = (4, 8)   # rows, cols -- fixed by conv1's 32 filters
+FILTER_GRID = (8, 4)   # rows, cols -- 32 filters, tall to suit a dedicated side column
 
 
 def draw_filters(canvas, activations, x, y, width, pane_h):
@@ -275,13 +275,23 @@ def compose(state, layout):
     y = layout.pad + 10
 
     # The skeleton takes whatever the rail has left once the panels below are accounted
-    # for. Sizing it from the remainder is what stops the motion readout from running
-    # off the bottom of the column when --debug-motion is on.
-    reserved = TOP3_HEIGHT + debug_height(state.debug)
-    size = max(110, min(rail_w, layout.camera_h - y - layout.pad - reserved - 10))
+    # for. Sizing it from the remainder is what stops those panels from running off the
+    # bottom of the column. draw_skeleton adds a fixed 30px of its own (10px title +
+    # 20px trailing gap) around whatever size it's given, so that 30 is subtracted here
+    # too -- verified against the real draw functions, not just this arithmetic, since
+    # an earlier version of this formula silently overflowed by exactly the amount it
+    # was short.
+    #
+    # The hidden-layer grid lives in the rail now, under Top 3, so the side column can
+    # go entirely to the filter mosaic instead of splitting it with the grid.
+    neuron_block = 10 + neuron_grid_height(rail_w) + 20 if layout.show_vis else 0
+    reserved = TOP3_HEIGHT + neuron_block + debug_height(state.debug)
+    size = max(110, min(rail_w, layout.camera_h - y - layout.pad - reserved - 30))
 
     y = draw_skeleton(canvas, state, rail_x, y, rail_w, size)
     y = draw_top3(canvas, state, rail_x, y, rail_w)
+    if layout.show_vis:
+        y = draw_neurons(canvas, state.dense, rail_x, y, rail_w)
     draw_debug(canvas, state.debug, rail_x, y)
 
     if layout.show_vis:
@@ -289,16 +299,10 @@ def compose(state, layout):
         vis_w = layout.vis_w - 2 * layout.pad
         vis_y = layout.pad + 10
 
-        # Filters get whatever height is left after the neuron grid's fixed footprint,
-        # rather than a fixed 2:1 aspect that ignored how much of the column's height
-        # was actually going unused. draw_filters adds a 10px title + 20px trailing gap
-        # around whatever height it's given, and draw_neurons does the same around its
-        # grid, so both overheads (60px total) are subtracted here to land exactly on
-        # camera_h - pad.
-        filters_h = (layout.camera_h - layout.pad) - vis_y - 60 - neuron_grid_height(vis_w)
-
-        filters_y = draw_filters(canvas, state.conv, vis_x, vis_y, vis_w, filters_h)
-        draw_neurons(canvas, state.dense, vis_x, filters_y, vis_w)
+        # The whole column, minus the title and trailing gap draw_filters adds around
+        # whatever height it's given, which lands exactly on camera_h - pad.
+        filters_h = (layout.camera_h - layout.pad) - vis_y - 30
+        draw_filters(canvas, state.conv, vis_x, vis_y, vis_w, filters_h)
 
     cv2.line(canvas, (layout.camera_w, 0), (layout.camera_w, layout.camera_h), DIM, 1)
     if layout.show_vis:

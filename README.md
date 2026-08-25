@@ -63,7 +63,7 @@ pip install -r requirements.txt
 python realtime_translator.py
 ```
 
-Add `--activations` for the convolutional filter mosaic and the hidden-layer neuron grid, which appear as an extra column in the same window. Both read named outputs off the ONNX graph, so they keep working across retrains. `--debug-motion` adds the live J/Z trajectory measurements, for tuning the thresholds in `motion.py`. Requires a webcam.
+Add `--activations` for the hidden-layer neuron grid, added under Top 3 in the same rail, and the convolutional filter mosaic, which gets a dedicated third column at full height. Both read named outputs off the ONNX graph, so they keep working across retrains. `--debug-motion` adds the live J/Z trajectory measurements, for tuning the thresholds in `motion.py`. Requires a webcam.
 
 ## Two environments
 

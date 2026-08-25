@@ -30,9 +30,11 @@ Keys: `q` quit · `space` · `backspace` · `c` clear · `r` repeat last letter
 
 ### The interface
 
-Everything renders into a **single window**, composited by `ui.py`: the camera feed, the skeleton the model actually receives, the three classes it is weighing, and the word buffer. Earlier versions opened four separate OS windows that had to be dragged into position on every run, and which OpenCV's Qt backend decorates with a toolbar on Linux — `WINDOW_GUI_NORMAL` turns that off, and the layout is now ours rather than the window manager's.
+Everything is laid out in a **single window** by `ui.py`: the camera feed, the skeleton the model actually receives, the three classes it is weighing, and the word buffer. Earlier versions opened four separate OS windows that had to be dragged into position on every run, and which OpenCV's Qt backend decorates with a toolbar on Linux — `WINDOW_GUI_NORMAL` turns that off.
 
-`ui.py` holds no camera or model code, so the whole interface can be rendered from a synthetic state and inspected as a PNG without a webcam. That is how it is developed and checked.
+The styling stays deliberately plain — black background, OpenCV's default font, the same white/green/grey palette the separate windows used. This is a debugging surface for a model, and it should look like one.
+
+`ui.py` holds no camera or model code, so the layout can be rendered from a synthetic state and checked as a PNG without a webcam.
 
 ### J and Z
 

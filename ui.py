@@ -160,12 +160,17 @@ def draw_debug(canvas, lines, x, y):
     return y + DEBUG_LINE_H * len(lines) + 14
 
 
-def draw_filters(canvas, activations, x, y, width):
+FILTER_GRID = (4, 8)   # rows, cols -- fixed by conv1's 32 filters
+
+
+def draw_filters(canvas, activations, x, y, width, pane_h):
+    """`pane_h` is handed in rather than derived from `width`, so the mosaic can claim
+    whatever vertical space `compose()` finds left over in the column instead of being
+    capped to a fixed 2:1 aspect. 32 small tiles read poorly; this is what fixes that."""
     text(canvas, "Conv filters", x, y, scale=0.42, color=GREY)
     y += 10
 
-    rows, cols = 4, 8
-    pane_h = int(width * rows / cols)
+    rows, cols = FILTER_GRID
     if activations is None:
         cv2.rectangle(canvas, (x, y), (x + width, y + pane_h), DIM, 1)
         return y + pane_h + 20
@@ -183,7 +188,25 @@ def draw_filters(canvas, activations, x, y, width):
 
     resized = cv2.resize(mosaic, (width, pane_h), interpolation=cv2.INTER_NEAREST)
     canvas[y:y + pane_h, x:x + width] = cv2.cvtColor(resized, cv2.COLOR_GRAY2BGR)
+
+    # Grid lines between filters, so 32 tiles at this size read as separate filters
+    # rather than one blurry sheet.
+    rows_n, cols_n = FILTER_GRID
+    for r in range(1, rows_n):
+        yy = y + pane_h * r // rows_n
+        cv2.line(canvas, (x, yy), (x + width, yy), BLACK, 1)
+    for c in range(1, cols_n):
+        xx = x + width * c // cols_n
+        cv2.line(canvas, (xx, y), (xx, y + pane_h), BLACK, 1)
+
     return y + pane_h + 20
+
+
+def neuron_grid_height(width):
+    """Content height `draw_neurons` will take up, so it can be budgeted before drawing."""
+    cols, rows, gap = 16, 8, 2
+    cell = (width - (cols - 1) * gap) // cols
+    return rows * cell + (rows - 1) * gap
 
 
 def draw_neurons(canvas, dense, x, y, width):
@@ -264,8 +287,18 @@ def compose(state, layout):
     if layout.show_vis:
         vis_x = layout.camera_w + layout.rail_w + layout.pad
         vis_w = layout.vis_w - 2 * layout.pad
-        vis_y = draw_filters(canvas, state.conv, vis_x, layout.pad + 10, vis_w)
-        draw_neurons(canvas, state.dense, vis_x, vis_y, vis_w)
+        vis_y = layout.pad + 10
+
+        # Filters get whatever height is left after the neuron grid's fixed footprint,
+        # rather than a fixed 2:1 aspect that ignored how much of the column's height
+        # was actually going unused. draw_filters adds a 10px title + 20px trailing gap
+        # around whatever height it's given, and draw_neurons does the same around its
+        # grid, so both overheads (60px total) are subtracted here to land exactly on
+        # camera_h - pad.
+        filters_h = (layout.camera_h - layout.pad) - vis_y - 60 - neuron_grid_height(vis_w)
+
+        filters_y = draw_filters(canvas, state.conv, vis_x, vis_y, vis_w, filters_h)
+        draw_neurons(canvas, state.dense, vis_x, filters_y, vis_w)
 
     cv2.line(canvas, (layout.camera_w, 0), (layout.camera_w, layout.camera_h), DIM, 1)
     if layout.show_vis:

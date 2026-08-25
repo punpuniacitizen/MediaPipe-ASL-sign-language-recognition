@@ -19,7 +19,9 @@ Keys: q quit · space · backspace · c clear · r repeat last letter
 """
 
 import argparse
+import ctypes
 import os
+import sys
 
 import cv2
 import mediapipe as mp
@@ -46,6 +48,53 @@ COMMIT_CONFIDENCE = 0.75     # and this much is needed to append a letter
 COMMIT_FRAMES = 10           # consecutive agreeing frames before committing
 SMOOTHING_WINDOW = 8         # rolling average over recent probability vectors
 LANDMARK_ALPHA = 0.35        # exponential smoothing on the landmarks themselves
+
+
+def _dark_titlebar(window_name):
+    """Best-effort: theme a cv2 window's native title bar dark, via the Windows DWM
+    API, so it doesn't clash with the pure-black interior the way a stock white title
+    bar does.
+
+    Windows only, and a silent no-op everywhere else -- window decoration is the
+    desktop environment's job on Linux, and each one themes it differently already,
+    so there's no equivalent to reach for. DWMWA_CAPTION_COLOR needs Windows 11
+    22000+; DWMWA_USE_IMMERSIVE_DARK_MODE alone (Windows 10 1809+) still gets a dark
+    grey title bar instead of white, which is most of the improvement even where the
+    exact-black match isn't available. Both calls fail silently (a non-zero HRESULT,
+    not a Python exception) on unsupported versions, and everything here is wrapped
+    besides, since a mismatched title bar is cosmetic and must never be able to break
+    the translator the way an unguarded popup call once did.
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        user32 = ctypes.windll.user32
+        dwmapi = ctypes.windll.dwmapi
+        user32.FindWindowW.restype = ctypes.c_void_p
+        user32.FindWindowW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p]
+        dwmapi.DwmSetWindowAttribute.argtypes = [
+            ctypes.c_void_p, ctypes.c_uint, ctypes.c_void_p, ctypes.c_uint]
+
+        hwnd = user32.FindWindowW(None, window_name)
+        if not hwnd:
+            return
+
+        DWMWA_USE_IMMERSIVE_DARK_MODE = 20
+        DWMWA_CAPTION_COLOR = 35
+        dark = ctypes.c_int(1)
+        dwmapi.DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE,
+                                     ctypes.byref(dark), ctypes.sizeof(dark))
+        black = ctypes.c_uint(0x00000000)  # COLORREF 0x00BBGGRR, matches ui.py's BLACK
+        dwmapi.DwmSetWindowAttribute(hwnd, DWMWA_CAPTION_COLOR,
+                                     ctypes.byref(black), ctypes.sizeof(black))
+
+        # Without this the new attributes only take visual effect after the window is
+        # next moved or resized; SWP_FRAMECHANGED forces the title bar to redraw now.
+        SWP_NOSIZE, SWP_NOMOVE, SWP_NOZORDER, SWP_FRAMECHANGED = 1, 2, 4, 0x20
+        user32.SetWindowPos(hwnd, None, 0, 0, 0, 0,
+                            SWP_NOSIZE | SWP_NOMOVE | SWP_NOZORDER | SWP_FRAMECHANGED)
+    except Exception:
+        pass
 
 
 class Popup:
@@ -86,12 +135,18 @@ class Popup:
     def render(self, image):
         try:
             if self.open:
-                if not self._created:
+                first_time = not self._created
+                if first_time:
                     flags = cv2.WINDOW_GUI_NORMAL
                     flags |= cv2.WINDOW_NORMAL if self.resizable else cv2.WINDOW_AUTOSIZE
                     cv2.namedWindow(self.name, flags)
                 cv2.imshow(self.name, image)
                 self._created = True
+                if first_time:
+                    # After imshow, not namedWindow: the native window isn't guaranteed
+                    # to be fully realised (and findable by title) until an image has
+                    # actually been shown in it.
+                    _dark_titlebar(self.name)
             elif self._created:
                 cv2.destroyWindow(self.name)
                 self._created = False
@@ -238,6 +293,7 @@ def main():
     # adds by default on Linux builds; the interface is composited here, not by Qt.
     cv2.namedWindow(WINDOW, cv2.WINDOW_AUTOSIZE | cv2.WINDOW_GUI_NORMAL)
     cv2.setMouseCallback(WINDOW, on_mouse)
+    titlebar_done = {"main": False}  # applied once, after the first real imshow
 
     mp_hands = mp.solutions.hands
     print("\n--- STARTING TRANSLATOR ---")
@@ -338,6 +394,9 @@ def main():
             state.reference_open = reference_popup.open
             state.hover = mouse["hover"]
             cv2.imshow(WINDOW, ui.compose(state, layout))
+            if not titlebar_done["main"]:
+                _dark_titlebar(WINDOW)
+                titlebar_done["main"] = True
 
             # render() runs every frame regardless of .open, since closing (whether by
             # button or by the popup's own window control) is handled inside it too --

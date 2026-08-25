@@ -56,10 +56,18 @@ class Popup:
     poll WND_PROP_VISIBLE. Without this, clicking the button to close a popup the user
     had already dismissed by hand would do nothing (imshow silently recreates whatever
     window it's given), and the button would keep reporting the popup as open forever.
+
+    Every cv2 call here is wrapped defensively. How HighGUI reports -- or reacts to --
+    a window the user just closed with their own window manager varies across
+    backends: on at least one Windows build, closing a popup with its native X could
+    take the whole translator down with it, not just that window, once the resulting
+    cv2 call raised something the earlier narrower `except cv2.error` didn't catch.
+    A popup misbehaving should never be able to kill the live camera loop.
     """
 
-    def __init__(self, name):
+    def __init__(self, name, resizable=False):
         self.name = name
+        self.resizable = resizable
         self.open = False
         self._created = False
 
@@ -72,17 +80,23 @@ class Popup:
             try:
                 if cv2.getWindowProperty(self.name, cv2.WND_PROP_VISIBLE) < 1:
                     self.open = False
-            except cv2.error:
+            except Exception:
                 self.open = False
 
     def render(self, image):
-        if self.open:
-            if not self._created:
-                cv2.namedWindow(self.name, cv2.WINDOW_AUTOSIZE | cv2.WINDOW_GUI_NORMAL)
-            cv2.imshow(self.name, image)
-            self._created = True
-        elif self._created:
-            cv2.destroyWindow(self.name)
+        try:
+            if self.open:
+                if not self._created:
+                    flags = cv2.WINDOW_GUI_NORMAL
+                    flags |= cv2.WINDOW_NORMAL if self.resizable else cv2.WINDOW_AUTOSIZE
+                    cv2.namedWindow(self.name, flags)
+                cv2.imshow(self.name, image)
+                self._created = True
+            elif self._created:
+                cv2.destroyWindow(self.name)
+                self._created = False
+        except Exception:
+            self.open = False
             self._created = False
 
 
@@ -209,7 +223,7 @@ def main():
     previous = None
 
     filters_popup = Popup(FILTERS_WINDOW)
-    reference_popup = Popup(REFERENCE_WINDOW)
+    reference_popup = Popup(REFERENCE_WINDOW, resizable=True)
     mouse = {"hover": None}
 
     def on_mouse(event, x, y, _flags, _param):

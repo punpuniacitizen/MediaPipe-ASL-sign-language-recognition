@@ -217,17 +217,24 @@ def draw_filters(canvas, activations, x, y, width, pane_h):
     return y + pane_h + 20
 
 
-def large_filter_mosaic(activations, size=760):
+def large_filter_mosaic(activations, cell_size=105):
     """Standalone, full-window version of the mosaic, for the 'Filters' zoom popup.
-    No title text -- the popup's own OS window title serves that purpose."""
+
+    Sized from FILTER_GRID's own aspect (8 rows x 4 cols, twice as tall as wide) rather
+    than a fixed square -- squeezing that into a square canvas is what stretched every
+    filter tile to 2x its true width in an earlier version of this function.
+
+    No title text -- the popup's own OS window title serves that purpose.
+    """
     rows, cols = FILTER_GRID
+    width, height = cols * cell_size, rows * cell_size
     if activations is None:
-        return np.zeros((size, size, 3), dtype=np.uint8)
+        return np.zeros((height, width, 3), dtype=np.uint8)
 
     mosaic = _filter_mosaic(activations, rows, cols)
-    resized = cv2.resize(mosaic, (size, size), interpolation=cv2.INTER_NEAREST)
+    resized = cv2.resize(mosaic, (width, height), interpolation=cv2.INTER_NEAREST)
     canvas = cv2.cvtColor(resized, cv2.COLOR_GRAY2BGR)
-    _draw_mosaic_grid(canvas, 0, 0, size, size, rows, cols)
+    _draw_mosaic_grid(canvas, 0, 0, width, height, rows, cols)
     return canvas
 
 

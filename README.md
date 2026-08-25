@@ -28,6 +28,12 @@ Letters accumulate into words. A letter is committed once it has been the top pr
 
 Keys: `q` quit · `space` · `backspace` · `c` clear · `r` repeat last letter
 
+### The interface
+
+Everything renders into a **single window**, composited by `ui.py`: the camera feed, the skeleton the model actually receives, the three classes it is weighing, and the word buffer. Earlier versions opened four separate OS windows that had to be dragged into position on every run, and which OpenCV's Qt backend decorates with a toolbar on Linux — `WINDOW_GUI_NORMAL` turns that off, and the layout is now ours rather than the window manager's.
+
+`ui.py` holds no camera or model code, so the whole interface can be rendered from a synthetic state and inspected as a PNG without a webcam. That is how it is developed and checked.
+
 ### J and Z
 
 ASL's J and Z are movements, not poses. A frame-by-frame classifier can only ever see the handshape at the start or end of the gesture. `motion.py` watches the last 1.5 seconds of hand positions and checks whether the motion that should accompany a J-ish or Z-ish handshape is actually there — a descent and a hook for J, a zigzag with two corners for Z.
@@ -55,7 +61,7 @@ pip install -r requirements.txt
 python realtime_translator.py
 ```
 
-Add `--activations` for the convolutional filter mosaic and the hidden-layer neuron grid, rendered live alongside the camera feed. Both read named outputs off the ONNX graph, so they keep working across retrains. Requires a webcam.
+Add `--activations` for the convolutional filter mosaic and the hidden-layer neuron grid, which appear as an extra column in the same window. Both read named outputs off the ONNX graph, so they keep working across retrains. `--debug-motion` adds the live J/Z trajectory measurements, for tuning the thresholds in `motion.py`. Requires a webcam.
 
 ## Two environments
 

@@ -76,6 +76,13 @@ class ViewState:
     dense: np.ndarray = None
     debug: list = field(default_factory=list)
 
+    # The two popup buttons in the bottom bar.
+    filters_enabled: bool = False    # model has named activation taps to show
+    reference_enabled: bool = False  # the reference image was found on disk
+    filters_open: bool = False
+    reference_open: bool = False
+    hover: str = None                # "filters", "reference", or None
+
 
 def text(img, string, x, y, scale=0.45, color=WHITE, thickness=1):
     string = str(string).translate(_FALLBACKS).encode("ascii", "replace").decode("ascii")
@@ -163,6 +170,33 @@ def draw_debug(canvas, lines, x, y):
 FILTER_GRID = (8, 4)   # rows, cols -- 32 filters, tall to suit a dedicated side column
 
 
+def _filter_mosaic(activations, rows, cols):
+    """Grayscale mosaic of conv1's feature maps, before resizing. Shared by the inline
+    panel and the zoomed popup so the two can never show subtly different pictures."""
+    height, cell_w, filters = activations.shape
+    mosaic = np.zeros((height * rows, cell_w * cols), dtype=np.uint8)
+    for i in range(min(filters, rows * cols)):
+        feature = activations[:, :, i].copy()
+        # Convolution padding lights up the border regardless of input; blanking it stops
+        # the per-cell normalisation from being dominated by an artefact.
+        feature[:2, :] = feature[-2:, :] = 0
+        feature[:, :2] = feature[:, -2:] = 0
+        r, c = divmod(i, cols)
+        mosaic[r * height:(r + 1) * height, c * cell_w:(c + 1) * cell_w] = to_gray(feature)
+    return mosaic
+
+
+def _draw_mosaic_grid(canvas, x, y, width, height, rows, cols):
+    """Lines between filter tiles, so a large mosaic reads as N separate filters
+    rather than one sheet."""
+    for r in range(1, rows):
+        yy = y + height * r // rows
+        cv2.line(canvas, (x, yy), (x + width, yy), BLACK, 1)
+    for c in range(1, cols):
+        xx = x + width * c // cols
+        cv2.line(canvas, (xx, y), (xx, y + height), BLACK, 1)
+
+
 def draw_filters(canvas, activations, x, y, width, pane_h):
     """`pane_h` is handed in rather than derived from `width`, so the mosaic can claim
     whatever vertical space `compose()` finds left over in the column instead of being
@@ -175,31 +209,26 @@ def draw_filters(canvas, activations, x, y, width, pane_h):
         cv2.rectangle(canvas, (x, y), (x + width, y + pane_h), DIM, 1)
         return y + pane_h + 20
 
-    height, cell_w, filters = activations.shape
-    mosaic = np.zeros((height * rows, cell_w * cols), dtype=np.uint8)
-    for i in range(min(filters, rows * cols)):
-        feature = activations[:, :, i].copy()
-        # Convolution padding lights up the border regardless of input; blanking it stops
-        # the per-cell normalisation from being dominated by an artefact.
-        feature[:2, :] = feature[-2:, :] = 0
-        feature[:, :2] = feature[:, -2:] = 0
-        r, c = divmod(i, cols)
-        mosaic[r * height:(r + 1) * height, c * cell_w:(c + 1) * cell_w] = to_gray(feature)
-
+    mosaic = _filter_mosaic(activations, rows, cols)
     resized = cv2.resize(mosaic, (width, pane_h), interpolation=cv2.INTER_NEAREST)
     canvas[y:y + pane_h, x:x + width] = cv2.cvtColor(resized, cv2.COLOR_GRAY2BGR)
-
-    # Grid lines between filters, so 32 tiles at this size read as separate filters
-    # rather than one blurry sheet.
-    rows_n, cols_n = FILTER_GRID
-    for r in range(1, rows_n):
-        yy = y + pane_h * r // rows_n
-        cv2.line(canvas, (x, yy), (x + width, yy), BLACK, 1)
-    for c in range(1, cols_n):
-        xx = x + width * c // cols_n
-        cv2.line(canvas, (xx, y), (xx, y + pane_h), BLACK, 1)
+    _draw_mosaic_grid(canvas, x, y, width, pane_h, rows, cols)
 
     return y + pane_h + 20
+
+
+def large_filter_mosaic(activations, size=760):
+    """Standalone, full-window version of the mosaic, for the 'Filters' zoom popup.
+    No title text -- the popup's own OS window title serves that purpose."""
+    rows, cols = FILTER_GRID
+    if activations is None:
+        return np.zeros((size, size, 3), dtype=np.uint8)
+
+    mosaic = _filter_mosaic(activations, rows, cols)
+    resized = cv2.resize(mosaic, (size, size), interpolation=cv2.INTER_NEAREST)
+    canvas = cv2.cvtColor(resized, cv2.COLOR_GRAY2BGR)
+    _draw_mosaic_grid(canvas, 0, 0, size, size, rows, cols)
+    return canvas
 
 
 def neuron_grid_height(width):
@@ -225,6 +254,53 @@ def draw_neurons(canvas, dense, x, y, width):
         cv2.rectangle(canvas, (cx, cy), (cx + cell, cy + cell), color, -1)
 
     return y + rows * cell + (rows - 1) * gap + 20
+
+
+BUTTON_W = 150
+BUTTON_H = 28
+BUTTON_GAP = 8
+
+
+def button_rects(layout):
+    """Fixed positions for the two popup buttons, bottom-right of the window.
+
+    `layout` is set once from CLI args and never changes during a run (the window is
+    WINDOW_AUTOSIZE, not resizable), so these are the same every frame and safe to
+    recompute cheaply wherever they're needed rather than threading them through state.
+    """
+    top = layout.camera_h
+    x2 = layout.width - layout.pad
+    y1 = top + 38
+    y2 = y1 + BUTTON_H
+    filters = (x2 - BUTTON_W, y1, x2, y2)
+    reference = (x2 - 2 * BUTTON_W - BUTTON_GAP, y1, x2 - BUTTON_W - BUTTON_GAP, y2)
+    return {"filters": filters, "reference": reference}
+
+
+def hit_test(layout, px, py):
+    """Which button, if any, contains point (px, py). Used by the mouse callback."""
+    for name, (x1, y1, x2, y2) in button_rects(layout).items():
+        if x1 <= px < x2 and y1 <= py < y2:
+            return name
+    return None
+
+
+def draw_button(canvas, rect, label, enabled, hover, active):
+    x1, y1, x2, y2 = rect
+    if not enabled:
+        bg, fg, border = (25, 25, 25), DIM, DIM
+    elif active:
+        bg, fg, border = (25, 55, 25), GREEN, GREEN
+    elif hover:
+        bg, fg, border = (55, 55, 55), WHITE, WHITE
+    else:
+        bg, fg, border = (35, 35, 35), GREY, DIM
+
+    cv2.rectangle(canvas, (x1, y1), (x2, y2), bg, -1)
+    cv2.rectangle(canvas, (x1, y1), (x2, y2), border, 1)
+    (tw, th), _ = cv2.getTextSize(label, FONT, 0.4, 1)
+    text(canvas, label, x1 + max(4, (x2 - x1 - tw) // 2), y1 + (y2 - y1 + th) // 2,
+         scale=0.4, color=fg)
 
 
 def draw_bottom(canvas, state, layout):
@@ -254,11 +330,27 @@ def draw_bottom(canvas, state, layout):
         if filled > 1:
             cv2.rectangle(canvas, (bar_x, top + 16), (bar_x + filled, top + 26), AMBER, -1)
 
-    shown = state.text[-40:] if len(state.text) > 40 else state.text
+    rects = button_rects(layout)
+
+    # Trimmed to fit the pixel width actually left before the buttons, not a fixed
+    # character count -- a 40-char run of a wide letter like W would otherwise overlap
+    # the Reference button (measured: 782px of text against a button starting at 780px
+    # in the narrowest window this layout produces).
+    available_w = rects["reference"][0] - pad - 12
+    shown = state.text
+    while shown and cv2.getTextSize(shown, FONT, 0.8, 2)[0][0] > available_w:
+        shown = shown[1:]
     text(canvas, shown or "-", pad, top + 62, scale=0.8, color=WHITE, thickness=2)
 
     text(canvas, "q quit   space   backspace   c clear   r repeat", pad,
          layout.height - 12, scale=0.4, color=GREY)
+
+    draw_button(canvas, rects["reference"], "Reference",
+                enabled=state.reference_enabled, hover=state.hover == "reference",
+                active=state.reference_open)
+    draw_button(canvas, rects["filters"], "Filters (zoom)",
+                enabled=state.filters_enabled, hover=state.hover == "filters",
+                active=state.filters_open)
 
 
 TOP3_HEIGHT = 8 + 3 * 26 + 14

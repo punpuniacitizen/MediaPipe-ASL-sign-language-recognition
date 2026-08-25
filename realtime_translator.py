@@ -5,11 +5,15 @@ Reads hand landmarks from the webcam, renders them through `preprocessing.render
 accumulate into a word buffer, and the two dynamic letters are resolved by `motion.py`.
 
     python realtime_translator.py
-    python realtime_translator.py --activations     # filter mosaic + neuron grid
+    python realtime_translator.py --activations     # filter mosaic + neuron grid inline
     python realtime_translator.py --debug-motion    # live J/Z trajectory readout
 
 Everything is composited into a single window by `ui.py`, rather than the four separate
-OS windows earlier versions opened.
+OS windows earlier versions opened. Two buttons in the bottom-right open secondary
+windows on click: "Filters (zoom)" pops the convolutional filter mosaic full-size
+regardless of --activations, and "Reference" opens a static ASL alphabet sheet (see
+build_reference.py) to sign against. Both toggle closed on a second click, or by closing
+the popup window directly.
 
 Keys: q quit · space · backspace · c clear · r repeat last letter
 """
@@ -27,6 +31,9 @@ import ui
 from motion import MotionTracker
 
 WINDOW = "ASL Translator"
+FILTERS_WINDOW = "Conv Filters (enlarged)"
+REFERENCE_WINDOW = "ASL Alphabet Reference"
+REFERENCE_IMAGE = "docs/asl-alphabet-reference.png"  # see build_reference.py
 
 # Outputs written by export_onnx.py. A model exported any other way still runs; the
 # extra visualisation panels are simply unavailable.
@@ -39,6 +46,44 @@ COMMIT_CONFIDENCE = 0.75     # and this much is needed to append a letter
 COMMIT_FRAMES = 10           # consecutive agreeing frames before committing
 SMOOTHING_WINDOW = 8         # rolling average over recent probability vectors
 LANDMARK_ALPHA = 0.35        # exponential smoothing on the landmarks themselves
+
+
+class Popup:
+    """A secondary cv2 window toggled by a button, that also notices if the user closes
+    it with the window manager's own control instead of clicking the button again.
+
+    OpenCV has no callback for a window closing, so the only way to detect that is to
+    poll WND_PROP_VISIBLE. Without this, clicking the button to close a popup the user
+    had already dismissed by hand would do nothing (imshow silently recreates whatever
+    window it's given), and the button would keep reporting the popup as open forever.
+    """
+
+    def __init__(self, name):
+        self.name = name
+        self.open = False
+        self._created = False
+
+    def toggle(self):
+        self.open = not self.open
+
+    def sync(self):
+        """Call once per frame, before rendering. Detects an OS-level close."""
+        if self._created and self.open:
+            try:
+                if cv2.getWindowProperty(self.name, cv2.WND_PROP_VISIBLE) < 1:
+                    self.open = False
+            except cv2.error:
+                self.open = False
+
+    def render(self, image):
+        if self.open:
+            if not self._created:
+                cv2.namedWindow(self.name, cv2.WINDOW_AUTOSIZE | cv2.WINDOW_GUI_NORMAL)
+            cv2.imshow(self.name, image)
+            self._created = True
+        elif self._created:
+            cv2.destroyWindow(self.name)
+            self._created = False
 
 
 class SpellingBuffer:
@@ -139,10 +184,19 @@ def main():
     session, input_name, size, output_names, has_taps = load_session(args.model)
     print(f"Model: {args.model} | input {size}x{size} | {len(class_names)} classes")
 
+    # Taps are fetched whenever the model has them, not only under --activations: the
+    # zoom button needs fresh activations to pop up on demand even when the inline
+    # column isn't showing. --activations only controls whether that inline column
+    # (and the hidden-layer grid under it) render by default.
     show_panels = args.activations and has_taps
     wanted = [LOGITS] if LOGITS in output_names else [output_names[0]]
-    if show_panels:
+    if has_taps:
         wanted += [CONV_TAP, DENSE_TAP]
+
+    reference_image = cv2.imread(REFERENCE_IMAGE) if os.path.exists(REFERENCE_IMAGE) else None
+    if reference_image is None:
+        print(f"Note: '{REFERENCE_IMAGE}' not found; run build_reference.py to enable "
+              "the Reference button.")
 
     capture = cv2.VideoCapture(args.camera)
     if not capture.isOpened():
@@ -154,9 +208,22 @@ def main():
     score_history = []
     previous = None
 
+    filters_popup = Popup(FILTERS_WINDOW)
+    reference_popup = Popup(REFERENCE_WINDOW)
+    mouse = {"hover": None}
+
+    def on_mouse(event, x, y, _flags, _param):
+        mouse["hover"] = ui.hit_test(layout, x, y)
+        if event == cv2.EVENT_LBUTTONDOWN:
+            if mouse["hover"] == "filters" and has_taps:
+                filters_popup.toggle()
+            elif mouse["hover"] == "reference" and reference_image is not None:
+                reference_popup.toggle()
+
     # WINDOW_GUI_NORMAL suppresses the toolbar and status bar that OpenCV's Qt backend
     # adds by default on Linux builds; the interface is composited here, not by Qt.
     cv2.namedWindow(WINDOW, cv2.WINDOW_AUTOSIZE | cv2.WINDOW_GUI_NORMAL)
+    cv2.setMouseCallback(WINDOW, on_mouse)
 
     mp_hands = mp.solutions.hands
     print("\n--- STARTING TRANSLATOR ---")
@@ -238,7 +305,7 @@ def main():
                 state.uncertain = confidence <= CONFIDENCE_FLOOR
                 state.text = buffer.text
                 state.progress = buffer.progress()
-                if show_panels:
+                if has_taps:
                     state.conv = outputs[1][0]
                     state.dense = outputs[2][0]
                 if args.debug_motion:
@@ -251,7 +318,20 @@ def main():
                 state.text = buffer.text
 
             state.camera = frame
+            state.filters_enabled = has_taps
+            state.reference_enabled = reference_image is not None
+            state.filters_open = filters_popup.open
+            state.reference_open = reference_popup.open
+            state.hover = mouse["hover"]
             cv2.imshow(WINDOW, ui.compose(state, layout))
+
+            # render() runs every frame regardless of .open, since closing (whether by
+            # button or by the popup's own window control) is handled inside it too --
+            # only the relatively expensive mosaic resize is skipped while closed.
+            filters_popup.sync()
+            reference_popup.sync()
+            filters_popup.render(ui.large_filter_mosaic(state.conv) if filters_popup.open else None)
+            reference_popup.render(reference_image if reference_popup.open else None)
 
             key = cv2.waitKey(5) & 0xFF
             if key == ord("q"):

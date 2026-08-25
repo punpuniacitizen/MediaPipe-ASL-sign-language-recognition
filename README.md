@@ -32,7 +32,7 @@ Keys: `q` quit · `space` · `backspace` · `c` clear · `r` repeat last letter
 
 Everything is laid out in a **single window** by `ui.py`: the camera feed, the skeleton the model actually receives, the three classes it is weighing, and the word buffer. Earlier versions opened four separate OS windows that had to be dragged into position on every run, and which OpenCV's Qt backend decorates with a toolbar on Linux — `WINDOW_GUI_NORMAL` turns that off.
 
-The styling stays deliberately plain — black background, OpenCV's default font, the same white/green/grey palette the separate windows used. This is a debugging surface for a model, and it should look like one.
+The styling stays deliberately plain — near-black background, OpenCV's default font, and a handful of colour roles rather than decoration: green for a confident reading, amber for progress not yet committed, and one blue accent for "the AI is looking here" (the hand-focus box, the hidden-layer heatmap). Every value is lifted from a validated dark-mode palette rather than picked by eye — see the palette section at the top of `ui.py`. This is a debugging surface for a model, and it should look like one.
 
 `ui.py` holds no camera or model code, so the layout can be rendered from a synthetic state and checked as a PNG without a webcam.
 

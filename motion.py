@@ -33,14 +33,29 @@ J_SHAPES = frozenset({"i", "j"})
 Z_SHAPES = frozenset({"d", "z"})
 
 # --- Tunables ------------------------------------------------------------------
-HISTORY_FRAMES = 24          # ~0.8 s at 30 fps
+# Sized for a signer moving deliberately rather than quickly. At 30 fps a fast gesture
+# smears the hand across the frame badly enough that MediaPipe drops it, and the
+# translator clears this buffer whenever the hand disappears, so a rushed J loses its own
+# trajectory before it can be measured. Signing slowly avoids that, but then the gesture
+# outlasts a short window, hence 1.5 s rather than 0.8 s.
+HISTORY_FRAMES = 45          # ~1.5 s at 30 fps
 MIN_PATH_LENGTH = 0.55       # total travel, in hand widths, before anything counts
-MOVING_THRESHOLD = 0.035     # per-frame speed above which the hand is "in motion"
+# Per-frame speed above which the hand counts as "in motion", which suppresses letter
+# commits. Do not lower this to try to catch slow gestures: measured against MediaPipe
+# jitter on a hand held still, the two distributions overlap almost completely (a still
+# hand medians ~0.011 with light jitter and ~0.023 with heavy jitter, a slow J ~0.023).
+# Dropping to 0.018 leaves a still hand only a ~55% chance of holding the COMMIT_FRAMES
+# consecutive frames a letter needs, which breaks spelling outright. Instantaneous speed
+# simply cannot separate a slow gesture from a jittery still hand; path length over the
+# window can, and `stats()['path']` is the number to use for that.
+MOVING_THRESHOLD = 0.035
 J_MIN_DESCENT = 0.20         # J drops before it hooks
 J_MIN_HOOK = 0.12            # horizontal travel of the hook at the end
 Z_MIN_REVERSALS = 2          # a Z has two corners
 Z_MIN_HORIZONTAL = 0.30      # the strokes are mostly sideways
-SMOOTHING = 3                # frames averaged before measuring direction changes
+# Raised with HISTORY_FRAMES to keep the same proportion of the window averaged; more
+# frames of a slow gesture also means more idle wobble for `_reversals` to miscount.
+SMOOTHING = 5                # frames averaged before measuring direction changes
 # -------------------------------------------------------------------------------
 
 

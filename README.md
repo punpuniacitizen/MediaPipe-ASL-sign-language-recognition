@@ -67,7 +67,7 @@ python realtime_translator.py
 
 Add `--activations` for the hidden-layer neuron grid, added under Top 3 in the same rail, and the convolutional filter mosaic, which gets a dedicated third column at full height. Both read named outputs off the ONNX graph, so they keep working across retrains. `--debug-motion` adds the live J/Z trajectory measurements, for tuning the thresholds in `motion.py`. Requires a webcam.
 
-The repo ships `docs/asl-alphabet-reference.png` too, which the **Reference** button opens — one rendered sign per letter to check your handshape against. Regenerate it with `python build_reference.py`: with `landmarks.npz` present it renders fresh through `preprocessing.render_skeleton()` at higher resolution; without it, it falls back to upscaling the tiles already in `docs/render-check.png`, which is what shipped this one.
+The repo ships `docs/asl-alphabet-reference.png` too, which the **Reference** button opens — one photo per letter to check your handshape against. The checked-in one is a real photo reference; `build_reference.py` can also generate a skeleton-based one (fresh through `preprocessing.render_skeleton()` if `landmarks.npz` is present, otherwise upscaled from `docs/render-check.png`) if you'd rather match exactly what the model sees instead of a photographed hand.
 
 ## Two environments
 

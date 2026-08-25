@@ -4,15 +4,40 @@ The translator used to open four OS windows — camera, skeleton, filter mosaic,
 grid — that had to be dragged into position on every run, and which OpenCV decorates
 with a Qt toolbar on Linux builds. Everything is placed in one frame here instead.
 
-The styling is deliberately plain: black background, OpenCV's default font, the same
-white/green/grey palette the separate windows used. This is a debugging surface for a
-model, and it should look like one.
+The styling is deliberately plain: near-black background, OpenCV's default font, and a
+small set of roles rather than decoration. This is a debugging surface for a model, and
+it should look like one.
 
 Everything works in **BGR**, because that is what `cv2.imshow` expects.
 `preprocessing.render_skeleton` returns RGB, so the caller converts once on the way in.
 
 The module holds no camera or model code, so the whole layout can be rendered from a
 synthetic state and checked as a PNG without a webcam.
+
+## Palette
+
+Colour is assigned by role, not chosen per-call. Every hex below is lifted directly from
+the dataviz skill's validated reference palette (`references/palette.md`) rather than
+picked by eye, and the three that can appear on screen together -- GOOD, WARNING, INFO --
+were re-run through `validate_palette.js` as a set: CVD separation, normal-vision
+separation and contrast against a #0d0d0d surface all pass. (Its categorical
+lightness-band check flags WARNING as brighter than a *series* hue should be, but that
+check is scoped to categorical palettes; WARNING is a status colour here, validated
+against its own contrast target instead, and status colours are supposed to stand out.)
+
+- **INK** (WHITE / GREY / MUTED) -- the dark-mode ink ramp: primary, secondary, muted.
+- **GOOD** / **WARNING** -- the skill's fixed, unthemed status pair: a confident reading,
+  and progress not yet committed.
+- **INFO** -- the sequential ramp's default hue (blue), reused as the one accent colour
+  for "the AI is looking here": the hand-focus box on the camera feed and the hidden-layer
+  heatmap (INFO_DIM at the low end, INFO at the high end). One hue for one job, rather
+  than the mismatched magenta box and unrelated cyan grid this replaced.
+- **BLACK** stays available for grid separators and the like, where the point is maximum
+  contrast against light content, not a themed role.
+
+The finger colours in the skeleton view are a different thing entirely: transcribed
+byte-for-byte from MediaPipe's own drawing style so the render matches what the model was
+trained on. They are correctness, not decoration, and this palette does not touch them.
 """
 
 from dataclasses import dataclass, field
@@ -21,11 +46,16 @@ import cv2
 import numpy as np
 
 BLACK = (0, 0, 0)
-WHITE = (255, 255, 255)
-GREY = (128, 128, 128)
-DIM = (70, 70, 70)
-GREEN = (0, 255, 0)
-AMBER = (0, 200, 255)
+BG = (13, 13, 13)             # #0d0d0d -- page plane
+PANEL = (25, 26, 26)          # #1a1a19 -- elevated surface (skeleton/filter boxes)
+WHITE = (255, 255, 255)       # #ffffff -- primary ink
+GREY = (183, 194, 195)        # #c3c2b7 -- secondary ink
+MUTED = (129, 135, 137)       # #898781 -- muted ink / disabled
+DIM = (53, 56, 56)            # #383835 -- hairline borders, unfilled bar tracks
+GREEN = (12, 163, 12)         # #0ca30c -- status: good
+AMBER = (25, 178, 250)        # #fab219 -- status: warning / pending
+INFO = (229, 135, 57)         # #3987e5 -- accent: AI attention (focus box, hot end of the heatmap)
+INFO_DIM = (107, 54, 13)      # #0d366b -- accent, dim end of the heatmap
 
 FONT = cv2.FONT_HERSHEY_SIMPLEX
 
@@ -89,9 +119,9 @@ def text(img, string, x, y, scale=0.45, color=WHITE, thickness=1):
     cv2.putText(img, string, (x, y), FONT, scale, color, thickness, cv2.LINE_AA)
 
 
-def fit_into(image, width, height):
-    """Scale preserving aspect ratio, letterboxed on black."""
-    canvas = np.zeros((height, width, 3), dtype=np.uint8)
+def fit_into(image, width, height, fill=None):
+    """Scale preserving aspect ratio, letterboxed on `fill` (defaults to BG)."""
+    canvas = np.full((height, width, 3), fill or BG, dtype=np.uint8)
     if image is None or image.size == 0:
         return canvas
 
@@ -112,12 +142,24 @@ def to_gray(values):
     return ((values - low) / (high - low) * 255).astype(np.uint8)
 
 
+def lerp_bgr(low, high, t):
+    """One-hue sequential ramp: `t` in [0, 255] -> a BGR tuple between `low` and `high`.
+
+    Used for the hidden-layer heatmap (INFO_DIM -> INFO), so magnitude reads as one
+    consistent accent colour getting brighter, the reference palette's sequential
+    convention, rather than an arbitrary hue picked per project.
+    """
+    t = t / 255.0
+    return tuple(int(round(a + (b - a) * t)) for a, b in zip(low, high))
+
+
 def draw_skeleton(canvas, state, x, y, width, size):
     text(canvas, "AI view (skeleton)", x, y, scale=0.42, color=GREY)
     y += 10
+    cv2.rectangle(canvas, (x, y), (x + size, y + size), PANEL, -1)
     cv2.rectangle(canvas, (x, y), (x + size, y + size), DIM, 1)
     if state.skeleton is not None:
-        canvas[y + 1:y + size, x + 1:x + size] = fit_into(state.skeleton, size - 1, size - 1)
+        canvas[y + 1:y + size, x + 1:x + size] = fit_into(state.skeleton, size - 1, size - 1, fill=PANEL)
     return y + size + 20
 
 
@@ -163,7 +205,7 @@ def draw_debug(canvas, lines, x, y):
     text(canvas, "Motion", x, y, scale=0.42, color=GREY)
     y += 10
     for i, line in enumerate(lines):
-        text(canvas, line, x, y + 12 + i * DEBUG_LINE_H, scale=0.38, color=AMBER)
+        text(canvas, line, x, y + 12 + i * DEBUG_LINE_H, scale=0.38, color=INFO)
     return y + DEBUG_LINE_H * len(lines) + 14
 
 
@@ -206,6 +248,7 @@ def draw_filters(canvas, activations, x, y, width, pane_h):
 
     rows, cols = FILTER_GRID
     if activations is None:
+        cv2.rectangle(canvas, (x, y), (x + width, y + pane_h), PANEL, -1)
         cv2.rectangle(canvas, (x, y), (x + width, y + pane_h), DIM, 1)
         return y + pane_h + 20
 
@@ -229,7 +272,7 @@ def large_filter_mosaic(activations, cell_size=105):
     rows, cols = FILTER_GRID
     width, height = cols * cell_size, rows * cell_size
     if activations is None:
-        return np.zeros((height, width, 3), dtype=np.uint8)
+        return np.full((height, width, 3), BG, dtype=np.uint8)
 
     mosaic = _filter_mosaic(activations, rows, cols)
     resized = cv2.resize(mosaic, (width, height), interpolation=cv2.INTER_NEAREST)
@@ -257,7 +300,7 @@ def draw_neurons(canvas, dense, x, y, width):
         r, c = divmod(i, cols)
         cx, cy = x + c * (cell + gap), y + r * (cell + gap)
         value = int(intensities[i])
-        color = DIM if dense is None else (value, value, 0)
+        color = DIM if dense is None else lerp_bgr(INFO_DIM, INFO, value)
         cv2.rectangle(canvas, (cx, cy), (cx + cell, cy + cell), color, -1)
 
     return y + rows * cell + (rows - 1) * gap + 20
@@ -295,13 +338,13 @@ def hit_test(layout, px, py):
 def draw_button(canvas, rect, label, enabled, hover, active):
     x1, y1, x2, y2 = rect
     if not enabled:
-        bg, fg, border = (25, 25, 25), DIM, DIM
+        bg, fg, border = BG, MUTED, DIM
     elif active:
-        bg, fg, border = (25, 55, 25), GREEN, GREEN
+        bg, fg, border = lerp_bgr(PANEL, GREEN, 60), GREEN, GREEN
     elif hover:
-        bg, fg, border = (55, 55, 55), WHITE, WHITE
+        bg, fg, border = lerp_bgr(PANEL, WHITE, 30), WHITE, WHITE
     else:
-        bg, fg, border = (35, 35, 35), GREY, DIM
+        bg, fg, border = PANEL, GREY, DIM
 
     cv2.rectangle(canvas, (x1, y1), (x2, y2), bg, -1)
     cv2.rectangle(canvas, (x1, y1), (x2, y2), border, 1)
@@ -365,7 +408,7 @@ TOP3_HEIGHT = 8 + 3 * 26 + 14
 
 def compose(state, layout):
     """Build the single frame that goes to the one window."""
-    canvas = np.zeros((layout.height, layout.width, 3), dtype=np.uint8)
+    canvas = np.full((layout.height, layout.width, 3), BG, dtype=np.uint8)
     canvas[:layout.camera_h, :layout.camera_w] = fit_into(
         state.camera, layout.camera_w, layout.camera_h)
 

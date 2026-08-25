@@ -16,8 +16,6 @@ Keys: q quit · space · backspace · c clear · r repeat last letter
 
 import argparse
 import os
-import time
-from collections import deque
 
 import cv2
 import mediapipe as mp
@@ -155,7 +153,6 @@ def main():
     layout = ui.Layout(show_vis=show_panels)
     score_history = []
     previous = None
-    frame_times = deque(maxlen=30)
 
     # WINDOW_GUI_NORMAL suppresses the toolbar and status bar that OpenCV's Qt backend
     # adds by default on Linux builds; the interface is composited here, not by Qt.
@@ -228,7 +225,9 @@ def main():
                 centre = points_px.min(axis=0) + extent / 2
                 x1, y1 = (centre - box / 2).astype(int)
                 x2, y2 = (centre + box / 2).astype(int)
-                cv2.rectangle(frame, (x1, y1), (x2, y2), ui.VIOLET, 2)
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 255), 2)
+                cv2.putText(frame, "AI FOCUS", (x1 + 5, y1 + 20),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 255), 1, cv2.LINE_AA)
 
                 state.skeleton = cv2.cvtColor(skeleton_rgb, cv2.COLOR_RGB2BGR)
                 state.scores = scores
@@ -250,12 +249,6 @@ def main():
                 tracker.reset()
                 buffer.update(None, 0.0, False, False)
                 state.text = buffer.text
-
-            now = time.perf_counter()
-            frame_times.append(now)
-            if len(frame_times) > 1:
-                span = frame_times[-1] - frame_times[0]
-                state.fps = (len(frame_times) - 1) / span if span > 0 else 0.0
 
             state.camera = frame
             cv2.imshow(WINDOW, ui.compose(state, layout))

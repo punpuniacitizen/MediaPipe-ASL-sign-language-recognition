@@ -1,15 +1,18 @@
-"""Single-window interface for the live translator.
+"""Single-window layout for the live translator.
 
 The translator used to open four OS windows — camera, skeleton, filter mosaic, neuron
-grid — that had to be dragged into place every run, and which OpenCV decorates with a Qt
-toolbar on Linux builds. Everything is composited into one frame here instead: one
-window to place, and a layout that is ours rather than the window manager's.
+grid — that had to be dragged into position on every run, and which OpenCV decorates
+with a Qt toolbar on Linux builds. Everything is placed in one frame here instead.
 
-Everything in this module works in **BGR**, because that is what `cv2.imshow` expects.
+The styling is deliberately plain: black background, OpenCV's default font, the same
+white/green/grey palette the separate windows used. This is a debugging surface for a
+model, and it should look like one.
+
+Everything works in **BGR**, because that is what `cv2.imshow` expects.
 `preprocessing.render_skeleton` returns RGB, so the caller converts once on the way in.
 
-The module is deliberately free of camera and model code so the whole interface can be
-rendered from a synthetic state and inspected as a PNG, without a webcam.
+The module holds no camera or model code, so the whole layout can be rendered from a
+synthetic state and checked as a PNG without a webcam.
 """
 
 from dataclasses import dataclass, field
@@ -17,32 +20,32 @@ from dataclasses import dataclass, field
 import cv2
 import numpy as np
 
-# --- Palette (BGR) -------------------------------------------------------------
-BG = (27, 22, 20)           # #14161b
-PANEL = (38, 31, 28)        # #1c1f26
-EDGE = (58, 47, 42)         # #2a2f3a
-TEXT = (238, 234, 232)      # #e8eaee
-MUTED = (173, 161, 154)     # #9aa1ad
-FAINT = (110, 97, 90)       # #5a616e
-ACCENT = (127, 214, 70)     # #46d67f — confident
-AMBER = (68, 181, 245)      # #f5b544 — in motion / partial
-RED = (90, 85, 242)         # #f2555a — no hand
-VIOLET = (250, 139, 167)    # #a78bfa — activations
+BLACK = (0, 0, 0)
+WHITE = (255, 255, 255)
+GREY = (128, 128, 128)
+DIM = (70, 70, 70)
+GREEN = (0, 255, 0)
+AMBER = (0, 200, 255)
 
 FONT = cv2.FONT_HERSHEY_SIMPLEX
-FONT_BOLD = cv2.FONT_HERSHEY_DUPLEX
+
+# OpenCV's Hershey fonts are ASCII-only: anything else is drawn as a literal '?'. The
+# prose in this project uses em dashes and ellipses freely, so rather than relying on
+# every caller remembering, strings are folded down where text is actually drawn.
+_FALLBACKS = str.maketrans({
+    "—": "-", "–": "-", "…": "...", "·": "-",
+    "“": '"', "”": '"', "‘": "'", "’": "'", "×": "x",
+})
 
 
 @dataclass
 class Layout:
-    """Fixed geometry. Computed once, so the compositor never re-measures per frame."""
-
     camera_w: int = 720
     camera_h: int = 540
-    rail_w: int = 300
-    vis_w: int = 320
-    bottom_h: int = 132
-    pad: int = 14
+    rail_w: int = 260
+    vis_w: int = 300
+    bottom_h: int = 96
+    pad: int = 12
     show_vis: bool = False
 
     @property
@@ -56,7 +59,7 @@ class Layout:
 
 @dataclass
 class ViewState:
-    """Everything the interface needs for one frame."""
+    """Everything the layout needs for one frame."""
 
     camera: np.ndarray = None
     skeleton: np.ndarray = None        # BGR, already converted from render_skeleton
@@ -72,49 +75,16 @@ class ViewState:
     conv: np.ndarray = None
     dense: np.ndarray = None
     debug: list = field(default_factory=list)
-    fps: float = 0.0
 
 
-# --- Primitives ----------------------------------------------------------------
-
-def rounded_rect(img, x, y, w, h, color, radius=10):
-    """Filled rounded rectangle. cv2 has no primitive for this."""
-    radius = max(0, min(radius, w // 2, h // 2))
-    if radius == 0:
-        cv2.rectangle(img, (x, y), (x + w, y + h), color, -1)
-        return
-    cv2.rectangle(img, (x + radius, y), (x + w - radius, y + h), color, -1)
-    cv2.rectangle(img, (x, y + radius), (x + w, y + h - radius), color, -1)
-    for cx, cy in ((x + radius, y + radius), (x + w - radius, y + radius),
-                   (x + radius, y + h - radius), (x + w - radius, y + h - radius)):
-        cv2.circle(img, (cx, cy), radius, color, -1, cv2.LINE_AA)
-
-
-# OpenCV's Hershey fonts are ASCII-only: anything else is drawn as a literal '?'. The
-# prose in this project uses em dashes and ellipses freely, so rather than relying on
-# every caller remembering, every string is folded down at the one place text is drawn.
-_FALLBACKS = str.maketrans({
-    "—": "-", "–": "-", "…": "...", "·": "-",
-    "“": '"', "”": '"', "‘": "'", "’": "'", "×": "x",
-})
-
-
-def ascii_only(string):
-    return str(string).translate(_FALLBACKS).encode("ascii", "replace").decode("ascii")
-
-
-def label(img, string, x, y, scale=0.44, color=MUTED, thickness=1, font=FONT):
-    cv2.putText(img, ascii_only(string), (x, y), font, scale, color, thickness, cv2.LINE_AA)
-
-
-def section_title(img, string, x, y):
-    """Small caps-style header. cv2 has no letter-spacing, so spaces stand in."""
-    label(img, " ".join(string.upper()), x, y, scale=0.36, color=FAINT, thickness=1)
+def text(img, string, x, y, scale=0.45, color=WHITE, thickness=1):
+    string = str(string).translate(_FALLBACKS).encode("ascii", "replace").decode("ascii")
+    cv2.putText(img, string, (x, y), FONT, scale, color, thickness, cv2.LINE_AA)
 
 
 def fit_into(image, width, height):
-    """Scale preserving aspect ratio and letterbox onto a panel-coloured field."""
-    canvas = np.full((height, width, 3), PANEL, dtype=np.uint8)
+    """Scale preserving aspect ratio, letterboxed on black."""
+    canvas = np.zeros((height, width, 3), dtype=np.uint8)
     if image is None or image.size == 0:
         return canvas
 
@@ -128,124 +98,80 @@ def fit_into(image, width, height):
     return canvas
 
 
-def normalize_to_gray(values):
+def to_gray(values):
     low, high = float(values.min()), float(values.max())
     if high <= low:
         return np.zeros(values.shape, dtype=np.uint8)
     return ((values - low) / (high - low) * 255).astype(np.uint8)
 
 
-# --- Panels --------------------------------------------------------------------
-
-def draw_camera(canvas, state, layout):
-    """The webcam feed, with a status chip in the corner."""
-    x0, y0 = 0, 0
-    pane = fit_into(state.camera, layout.camera_w, layout.camera_h)
-    canvas[y0:y0 + layout.camera_h, x0:x0 + layout.camera_w] = pane
-
-    if state.hand_present:
-        chip_color, chip_text = (AMBER, "MOVING") if state.moving else (ACCENT, "TRACKING")
-    else:
-        chip_color, chip_text = RED, "NO HAND"
-
-    pad = layout.pad
-    chip_w = 22 + 8 * len(chip_text)
-    rounded_rect(canvas, pad, pad, chip_w, 26, PANEL, radius=13)
-    cv2.circle(canvas, (pad + 14, pad + 13), 4, chip_color, -1, cv2.LINE_AA)
-    label(canvas, chip_text, pad + 25, pad + 17, scale=0.4, color=TEXT)
-
-    if state.fps:
-        fps_text = f"{state.fps:.0f} fps"
-        fw = 16 + 8 * len(fps_text)
-        fx = layout.camera_w - pad - fw
-        rounded_rect(canvas, fx, pad, fw, 26, PANEL, radius=13)
-        label(canvas, fps_text, fx + 8, pad + 17, scale=0.4, color=MUTED)
-
-
-def draw_skeleton_card(canvas, state, x, y, width, size=None):
-    """'What the model sees' — the render that actually reaches the network."""
-    section_title(canvas, "what the model sees", x, y)
-    y += 12
-
-    size = width if size is None else size
-    rounded_rect(canvas, x, y, size, size, PANEL, radius=10)
-
+def draw_skeleton(canvas, state, x, y, width, size):
+    text(canvas, "AI view (skeleton)", x, y, scale=0.42, color=GREY)
+    y += 10
+    cv2.rectangle(canvas, (x, y), (x + size, y + size), DIM, 1)
     if state.skeleton is not None:
-        inner = fit_into(state.skeleton, size - 8, size - 8)
-        canvas[y + 4:y + 4 + size - 8, x + 4:x + 4 + size - 8] = inner
-    else:
-        label(canvas, "waiting for a hand", x + 18, y + size // 2, scale=0.42, color=FAINT)
-
-    return y + size + 18
+        canvas[y + 1:y + size, x + 1:x + size] = fit_into(state.skeleton, size - 1, size - 1)
+    return y + size + 20
 
 
 def draw_top3(canvas, state, x, y, width):
-    """The three classes the model is weighing, with the commit threshold marked."""
-    section_title(canvas, "top 3", x, y)
-    y += 16
+    text(canvas, "Top 3", x, y, scale=0.42, color=GREY)
+    y += 8
 
     if state.scores is None or not len(state.class_names):
-        label(canvas, "-", x, y + 14, scale=0.5, color=FAINT)
-        return y + 90
+        return y + 3 * 26
 
-    order = np.argsort(state.scores)[::-1][:3]
-    bar_x = x + 26
-    bar_w = width - 26
+    bar_x = x + 24
+    bar_w = width - 24 - 44
 
-    for rank, index in enumerate(order):
+    for rank, index in enumerate(np.argsort(state.scores)[::-1][:3]):
         probability = float(state.scores[index])
-        row_y = y + rank * 30
+        row_y = y + rank * 26
 
-        color = ACCENT if rank == 0 and probability > 0.5 else FAINT
-        label(canvas, state.class_names[index].upper(), x, row_y + 15,
-              scale=0.6, color=TEXT if rank == 0 else MUTED, thickness=1, font=FONT_BOLD)
+        color = GREEN if rank == 0 and probability > 0.5 else GREY
+        text(canvas, state.class_names[index].upper(), x, row_y + 15,
+             scale=0.55, color=WHITE if rank == 0 else GREY)
 
-        rounded_rect(canvas, bar_x, row_y + 4, bar_w, 14, PANEL, radius=7)
+        cv2.rectangle(canvas, (bar_x, row_y + 4), (bar_x + bar_w, row_y + 16), DIM, 1)
         filled = int(bar_w * probability)
-        if filled > 3:
-            rounded_rect(canvas, bar_x, row_y + 4, filled, 14, color, radius=7)
+        if filled > 1:
+            cv2.rectangle(canvas, (bar_x, row_y + 4), (bar_x + filled, row_y + 16), color, -1)
+        text(canvas, f"{probability * 100:.0f}%", bar_x + bar_w + 8, row_y + 15,
+             scale=0.42, color=WHITE if rank == 0 else GREY)
 
-        percent = f"{probability * 100:.0f}%"
-        label(canvas, percent, bar_x + bar_w - 10 * len(percent), row_y + 15,
-              scale=0.4, color=TEXT if rank == 0 else MUTED)
-
-    return y + 3 * 30 + 12
+    return y + 3 * 26 + 14
 
 
 DEBUG_LINE_H = 15
 
 
 def debug_height(lines):
-    """Height `draw_debug` will occupy, so the rail can be budgeted before drawing."""
-    return 0 if not lines else 14 + DEBUG_LINE_H * len(lines) + 12 + 14
+    """Height `draw_debug` will take, so the rail can be budgeted before drawing."""
+    return 0 if not lines else 10 + DEBUG_LINE_H * len(lines) + 14
 
 
-def draw_debug(canvas, lines, x, y, width):
-    """Live J/Z trajectory readings, for tuning the thresholds in motion.py."""
+def draw_debug(canvas, lines, x, y):
     if not lines:
         return y
-    section_title(canvas, "motion", x, y)
-    y += 14
-    height = DEBUG_LINE_H * len(lines) + 12
-    rounded_rect(canvas, x, y, width, height, PANEL, radius=8)
+    text(canvas, "Motion", x, y, scale=0.42, color=GREY)
+    y += 10
     for i, line in enumerate(lines):
-        label(canvas, line, x + 10, y + 18 + i * DEBUG_LINE_H, scale=0.35, color=VIOLET)
-    return y + height + 14
+        text(canvas, line, x, y + 12 + i * DEBUG_LINE_H, scale=0.38, color=AMBER)
+    return y + DEBUG_LINE_H * len(lines) + 14
 
 
-def draw_filter_mosaic(canvas, activations, x, y, width):
-    """First convolutional block, tiled 4x8 — one cell per filter."""
-    section_title(canvas, "conv filters", x, y)
-    y += 12
+def draw_filters(canvas, activations, x, y, width):
+    text(canvas, "Conv filters", x, y, scale=0.42, color=GREY)
+    y += 10
 
     rows, cols = 4, 8
+    pane_h = int(width * rows / cols)
     if activations is None:
-        rounded_rect(canvas, x, y, width, width // 2, PANEL, radius=10)
-        return y + width // 2 + 18
+        cv2.rectangle(canvas, (x, y), (x + width, y + pane_h), DIM, 1)
+        return y + pane_h + 20
 
-    height, cell_w, filters = activations.shape[0], activations.shape[1], activations.shape[2]
+    height, cell_w, filters = activations.shape
     mosaic = np.zeros((height * rows, cell_w * cols), dtype=np.uint8)
-
     for i in range(min(filters, rows * cols)):
         feature = activations[:, :, i].copy()
         # Convolution padding lights up the border regardless of input; blanking it stops
@@ -253,132 +179,98 @@ def draw_filter_mosaic(canvas, activations, x, y, width):
         feature[:2, :] = feature[-2:, :] = 0
         feature[:, :2] = feature[:, -2:] = 0
         r, c = divmod(i, cols)
-        mosaic[r * height:(r + 1) * height, c * cell_w:(c + 1) * cell_w] = normalize_to_gray(feature)
+        mosaic[r * height:(r + 1) * height, c * cell_w:(c + 1) * cell_w] = to_gray(feature)
 
-    tinted = cv2.applyColorMap(mosaic, cv2.COLORMAP_BONE)
-    pane_h = int(width * rows / cols)
-    canvas[y:y + pane_h, x:x + width] = cv2.resize(tinted, (width, pane_h),
-                                                   interpolation=cv2.INTER_NEAREST)
-    return y + pane_h + 18
+    resized = cv2.resize(mosaic, (width, pane_h), interpolation=cv2.INTER_NEAREST)
+    canvas[y:y + pane_h, x:x + width] = cv2.cvtColor(resized, cv2.COLOR_GRAY2BGR)
+    return y + pane_h + 20
 
 
-def draw_neuron_grid(canvas, dense, x, y, width):
-    """The 128-unit hidden layer, one square per neuron."""
-    section_title(canvas, "hidden layer  128", x, y)
-    y += 12
+def draw_neurons(canvas, dense, x, y, width):
+    text(canvas, "Hidden layer (128)", x, y, scale=0.42, color=GREY)
+    y += 10
 
-    cols, rows = 16, 8
-    gap = 2
+    cols, rows, gap = 16, 8, 2
     cell = (width - (cols - 1) * gap) // cols
-    grid_h = rows * cell + (rows - 1) * gap
+    intensities = to_gray(dense) if dense is not None else np.zeros(128, np.uint8)
 
-    rounded_rect(canvas, x - 6, y - 6, width + 12, grid_h + 12, PANEL, radius=8)
-
-    intensities = normalize_to_gray(dense) if dense is not None else np.zeros(128, np.uint8)
     for i in range(128):
         r, c = divmod(i, cols)
         cx, cy = x + c * (cell + gap), y + r * (cell + gap)
-        if dense is None:
-            color = EDGE
-        else:
-            value = int(intensities[i])
-            color = (int(VIOLET[0] * value / 255), int(VIOLET[1] * value / 255),
-                     int(VIOLET[2] * value / 255))
+        value = int(intensities[i])
+        color = DIM if dense is None else (value, value, 0)
         cv2.rectangle(canvas, (cx, cy), (cx + cell, cy + cell), color, -1)
 
-    return y + grid_h + 18
+    return y + rows * cell + (rows - 1) * gap + 20
 
 
-def draw_bottom_bar(canvas, state, layout):
-    """Current reading, commit progress, and the spelled-out text."""
+def draw_bottom(canvas, state, layout):
     top = layout.camera_h
-    width = layout.width
     pad = layout.pad
 
-    cv2.rectangle(canvas, (0, top), (width, layout.height), BG, -1)
-    cv2.line(canvas, (0, top), (width, top), EDGE, 1)
-
-    # --- Left: the letter being read, and how close it is to committing.
-    box_w = 190
-    rounded_rect(canvas, pad, top + pad, box_w, layout.bottom_h - 2 * pad, PANEL, radius=12)
+    cv2.line(canvas, (0, top), (layout.width, top), DIM, 1)
 
     if not state.hand_present:
-        label(canvas, "-", pad + 30, top + 66, scale=1.9, color=FAINT, thickness=3, font=FONT_BOLD)
-        label(canvas, "no hand", pad + 22, top + 92, scale=0.4, color=FAINT)
+        reading, color = "Looking for a hand...", GREY
     elif state.uncertain:
-        label(canvas, "?", pad + 28, top + 68, scale=1.6, color=AMBER, thickness=2, font=FONT_BOLD)
-        label(canvas, "not sure", pad + 22, top + 92, scale=0.4, color=MUTED)
+        reading, color = "Not sure...", GREY
     else:
-        label(canvas, state.letter.upper(), pad + 24, top + 72,
-              scale=1.9, color=TEXT, thickness=3, font=FONT_BOLD)
-        label(canvas, f"{state.confidence * 100:.0f}%", pad + 92, top + 60,
-              scale=0.62, color=ACCENT, thickness=1, font=FONT_BOLD)
+        reading = f"Sign: {state.letter.upper()} ({state.confidence * 100:.1f}%)"
+        if state.moving:
+            reading += "   [moving]"
+        color = GREEN
 
-        # Progress toward COMMIT_FRAMES. Amber while filling, green the moment it lands.
-        track_x, track_y, track_w = pad + 92, top + 74, box_w - 92 - 18
-        rounded_rect(canvas, track_x, track_y, track_w, 8, EDGE, radius=4)
-        filled = int(track_w * min(max(state.progress, 0.0), 1.0))
-        if filled > 2:
-            colour = ACCENT if state.progress >= 1.0 else AMBER
-            rounded_rect(canvas, track_x, track_y, filled, 8, colour, radius=4)
-        label(canvas, "hold to commit", track_x, top + 96, scale=0.34, color=FAINT)
+    text(canvas, reading, pad, top + 28, scale=0.75, color=color, thickness=2)
 
-    # --- Right: the buffer, which is the actual output of the whole program.
-    text_x = pad * 2 + box_w
-    section_title(canvas, "spelled", text_x, top + 26)
+    # Progress toward committing the current letter.
+    if state.progress > 0:
+        bar_w = 200
+        bar_x = layout.width - pad - bar_w
+        cv2.rectangle(canvas, (bar_x, top + 16), (bar_x + bar_w, top + 26), DIM, 1)
+        filled = int(bar_w * min(state.progress, 1.0))
+        if filled > 1:
+            cv2.rectangle(canvas, (bar_x, top + 16), (bar_x + filled, top + 26), AMBER, -1)
 
-    shown = state.text[-32:] if len(state.text) > 32 else state.text
-    if shown:
-        label(canvas, shown, text_x, top + 68, scale=0.95, color=TEXT, thickness=2, font=FONT_BOLD)
-        # A caret makes it read as a text field rather than a static label.
-        (tw, _), _ = cv2.getTextSize(shown, FONT_BOLD, 0.95, 2)
-        cv2.rectangle(canvas, (text_x + tw + 6, top + 48), (text_x + tw + 9, top + 70), ACCENT, -1)
-    else:
-        label(canvas, "start signing...", text_x, top + 68, scale=0.7, color=FAINT, font=FONT_BOLD)
+    shown = state.text[-40:] if len(state.text) > 40 else state.text
+    text(canvas, shown or "-", pad, top + 62, scale=0.8, color=WHITE, thickness=2)
 
-    hints = "Q quit    SPACE space    BACKSPACE delete    C clear    R repeat letter"
-    label(canvas, hints, text_x, layout.height - 16, scale=0.38, color=FAINT)
+    text(canvas, "q quit   space   backspace   c clear   r repeat", pad,
+         layout.height - 12, scale=0.4, color=GREY)
 
 
-# --- Entry point ---------------------------------------------------------------
-
-TOP3_HEIGHT = 16 + 3 * 30 + 12
+TOP3_HEIGHT = 8 + 3 * 26 + 14
 
 
 def compose(state, layout):
     """Build the single frame that goes to the one window."""
-    canvas = np.full((layout.height, layout.width, 3), BG, dtype=np.uint8)
-
-    draw_camera(canvas, state, layout)
+    canvas = np.zeros((layout.height, layout.width, 3), dtype=np.uint8)
+    canvas[:layout.camera_h, :layout.camera_w] = fit_into(
+        state.camera, layout.camera_w, layout.camera_h)
 
     rail_x = layout.camera_w + layout.pad
     rail_w = layout.rail_w - 2 * layout.pad
-    y = layout.pad + 14
+    y = layout.pad + 10
 
-    # The skeleton card takes whatever the rail has left once the panels below it are
-    # accounted for. Sizing it last-but-drawn-first is what stops the motion readout
-    # from running off the bottom of the column when --debug-motion is on.
+    # The skeleton takes whatever the rail has left once the panels below are accounted
+    # for. Sizing it from the remainder is what stops the motion readout from running
+    # off the bottom of the column when --debug-motion is on.
     reserved = TOP3_HEIGHT + debug_height(state.debug)
-    available = layout.camera_h - y - layout.pad - reserved
-    skeleton_size = max(120, min(rail_w, available - 12))
+    size = max(110, min(rail_w, layout.camera_h - y - layout.pad - reserved - 10))
 
-    y = draw_skeleton_card(canvas, state, rail_x, y, rail_w, size=skeleton_size)
+    y = draw_skeleton(canvas, state, rail_x, y, rail_w, size)
     y = draw_top3(canvas, state, rail_x, y, rail_w)
-    if state.debug:
-        draw_debug(canvas, state.debug, rail_x, y, rail_w)
+    draw_debug(canvas, state.debug, rail_x, y)
 
     if layout.show_vis:
         vis_x = layout.camera_w + layout.rail_w + layout.pad
         vis_w = layout.vis_w - 2 * layout.pad
-        vis_y = layout.pad + 14
-        vis_y = draw_filter_mosaic(canvas, state.conv, vis_x, vis_y, vis_w)
-        draw_neuron_grid(canvas, state.dense, vis_x, vis_y + 6, vis_w)
+        vis_y = draw_filters(canvas, state.conv, vis_x, layout.pad + 10, vis_w)
+        draw_neurons(canvas, state.dense, vis_x, vis_y, vis_w)
 
-    # Column separators, drawn last so no panel paints over them.
-    cv2.line(canvas, (layout.camera_w, 0), (layout.camera_w, layout.camera_h), EDGE, 1)
+    cv2.line(canvas, (layout.camera_w, 0), (layout.camera_w, layout.camera_h), DIM, 1)
     if layout.show_vis:
         split = layout.camera_w + layout.rail_w
-        cv2.line(canvas, (split, 0), (split, layout.camera_h), EDGE, 1)
+        cv2.line(canvas, (split, 0), (split, layout.camera_h), DIM, 1)
 
-    draw_bottom_bar(canvas, state, layout)
+    draw_bottom(canvas, state, layout)
     return canvas

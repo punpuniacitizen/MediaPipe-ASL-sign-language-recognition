@@ -75,6 +75,15 @@ def main():
     import onnx
     import onnxruntime as ort
 
+    # The exported model runs on ONNX Runtime's CPU kernels in production, so the Keras
+    # reference used to verify parity must run on CPU too. Comparing against a GPU
+    # forward pass instead compares two different kernel implementations rather than
+    # checking the conversion: cuDNN and ONNX Runtime round differently, and at the
+    # logit scale this model reaches that shows up as an absolute difference past the
+    # tolerance even though nothing about the conversion is wrong.
+    if tf.config.list_physical_devices("GPU"):
+        tf.config.set_visible_devices([], "GPU")
+
     keras_model = tf.keras.models.load_model(args.model)
     size = int(keras_model.inputs[0].shape[1])
     instrumented = build_instrumented(tf, keras_model)
@@ -91,8 +100,13 @@ def main():
 
     # Match converter outputs to Keras outputs by value rather than trusting the order:
     # a mislabelled tap would show the wrong picture in the visualiser without erroring.
+    # The probe is rendered like a real skeleton rather than raw pixel noise: uniform
+    # noise sits so far outside what BatchNorm was calibrated on that logits blow up to
+    # extreme magnitudes, and at that scale ordinary GPU-vs-CPU float rounding produces
+    # an absolute difference past the matching tolerance even though nothing is wrong.
     rng = np.random.default_rng(0)
-    probe = rng.uniform(0, 255, size=(4, size, size, 3)).astype(np.float32)
+    probe_points = rng.uniform(0.15, 0.85, size=(4, pp.NUM_LANDMARKS, 2)).astype(np.float32)
+    probe = np.stack([pp.render_skeleton(p, size=size) for p in probe_points]).astype(np.float32)
     expected = [np.asarray(o) for o in instrumented.predict(probe, verbose=0)]
 
     session = ort.InferenceSession(model_proto.SerializeToString())

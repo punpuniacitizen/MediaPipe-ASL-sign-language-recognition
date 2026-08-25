@@ -1,519 +1,338 @@
-# Traspaso: ProyectoNN (traductor ASL) — continuar en Linux
+# Report: the retraining session, start to finish
 
-> Documento de estado para retomar el trabajo. Escrito el 2026-08-24 al final de una sesión en
-> Windows donde se rediseñó el pipeline pero **no se llegó a reentrenar el modelo**, porque eso
-> necesita GPU y los datasets originales. Todo lo que falta está acá.
+> Written 2026-08-25, at the end of the Linux session that the previous handoff was asking
+> for. The previous document was a to-do list; this one is a record of what happened when
+> that list was executed, including the parts that did not go as the list predicted.
 >
-> Se puede borrar cuando el reentrenamiento esté hecho y el README refleje los resultados reales.
+> **Audience:** whoever picks this up next, human or model. It is also the raw material for
+> the release notes — the sections marked *for the README* are the ones worth lifting into
+> public docs when this version ships.
 
 ---
 
-## 1. Resumen en treinta segundos
+## 1. What this session was for
 
-El traductor ASL funcionaba pero las predicciones saltaban violentamente con la mano quieta. La
-causa **no era falta de épocas**: eran tres bugs que hacían que el modelo viera en producción algo
-distinto de lo que vio al entrenar, más una métrica de validación inflada por fuga de datos.
+The previous session rebuilt the training pipeline on Windows but could not run it: no GPU,
+no datasets. Everything had been validated end-to-end against **synthetic** landmarks only.
+The pipeline's mechanics were known to work; the model's quality was entirely unknown.
 
-El pipeline se rehízo entero alrededor de una idea: **entrenamiento e inferencia dibujan el
-esqueleto con la misma función**. Todo el código nuevo está escrito y probado end-to-end con datos
-sintéticos. Falta correrlo con datos reales.
+This session ran it for real. Outcome, up front:
 
-**Tu tarea:** montar el entorno en Linux, bajar los datasets de fotos, correr los cuatro pasos del
-pipeline, y actualizar el README con las métricas reales.
-
----
-
-## 2. Primeros cinco minutos en Linux
-
-Si estás arrancando esta sesión recién entrando a Linux, este es el orden exacto. Cada paso depende
-del anterior — no saltear ninguno, y si alguno falla, parar ahí y resolverlo antes de seguir.
-
-```bash
-# 1. La GPU tiene que estar visible ANTES de instalar nada. Si esto falla, todo lo
-#    demás es tiempo perdido hasta que se resuelva el driver de NVIDIA.
-nvidia-smi
-
-# 2. Version de Python. Ni TensorFlow ni MediaPipe tienen wheels para 3.13+.
-python3 --version   # necesita ser 3.11 o 3.12; si no, instalar 3.12 aparte
-
-# 3. Clonar la branch de trabajo (NO main -- ahi todavia esta el codigo viejo).
-#    Clonar a un disco local, nunca dentro de una carpeta sincronizada (el I/O lento
-#    fue uno de los problemas originales del proyecto).
-git clone --branch wip/retrain-pipeline \
-    https://github.com/punpuniacitizen/MediaPipe-ASL-sign-language-recognition.git \
-    ~/proyecto-nn
-cd ~/proyecto-nn
-
-# 4. Dos entornos separados -- mediapipe y TensorFlow fijan versiones de protobuf
-#    incompatibles entre si (ver la seccion 6 para el detalle completo).
-python3.12 -m venv .venv-infer
-./.venv-infer/bin/pip install -r requirements.txt
-
-python3.12 -m venv .venv-train
-./.venv-train/bin/pip install -r requirements-train.txt
-
-# 5. Confirmar que TensorFlow ve la GPU. Tiene que devolver un PhysicalDevice, no una
-#    lista vacia. Si sale vacio, parar y diagnosticar antes de instalar nada mas.
-./.venv-train/bin/python -c \
-    "import tensorflow as tf; print(tf.config.list_physical_devices('GPU'))"
-```
-
-Si los cinco pasos salen bien, seguir por la sección 8 (datasets) y 9 (el pipeline en sí). El resto
-de este documento es contexto y referencia — no hace falta leerlo entero antes de empezar, pero
-conviene tenerlo a mano para las secciones 5 (invariantes que no romper), 10 (verificación) y 11
-(trampas ya resueltas, para no reintroducirlas).
-
----
-
-## 3. Estado actual
-
-| Cosa | Estado |
+| | |
 |---|---|
-| Código del pipeline | ✅ Escrito y probado end-to-end (con datos sintéticos) |
-| `asl_cnn_model.onnx` en el repo | ⚠️ **Todavía el viejo, 36 clases, entrenado con los bugs** |
-| `class_names.txt` | ⚠️ **Todavía 36 clases**; `train_model.py` lo reescribe con 26 |
-| `docs/training-accuracy.png` | ⚠️ **Curva vieja**; `train_model.py` la regenera |
-| README | ✅ Actualizado, **sin afirmar ninguna métrica** (a propósito) |
-| Entrenamiento real | ❌ **Pendiente** — es lo que hay que hacer |
-| Umbrales de J/Z | ⚠️ Calibrados contra trayectorias sintéticas, no contra una mano real |
+| Validation accuracy | **96.8%** |
+| Test accuracy (unseen dataset) | **93.7%** |
+| Gap | 3.0 points |
+| ONNX parity | 1.14e-05 |
+| Live spelling | works — letters land first try |
+| J / Z | work, after retuning the motion window |
 
-El traductor **corre hoy** con el modelo viejo: lee el tamaño de entrada y la cantidad de clases del
-propio modelo, así que no rompe. Los paneles de visualización quedan desactivados porque el modelo
-viejo no tiene las salidas nombradas.
+The old model claimed 97.9% and flickered on a live webcam. The new one claims less and
+behaves better, which is the entire point: the old number came from a leaky split.
 
 ---
 
-## 4. El diagnóstico (por qué se rehizo todo)
+## 2. Setup, and where the previous handoff was wrong
 
-Medido alimentando al modelo viejo con imágenes del propio dataset:
+The five-step checklist in the old document was mostly right. Two things it did not
+anticipate, both worth knowing because they cost real time:
 
-| entrada | accuracy |
+### Python 3.12 is not installable from Arch repos
+
+The old doc said "if not 3.11/3.12, install 3.12 aparte" without saying how. On CachyOS the
+system Python is 3.14, there is no `python312` package, and neither TensorFlow nor MediaPipe
+ships wheels for 3.13+. Resolved with `uv`:
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+uv python install 3.12
+uv venv --python 3.12 .venv-infer
+uv venv --python 3.12 .venv-train
+```
+
+### TensorFlow could not see the GPU, and the driver was fine
+
+`nvidia-smi` worked, `tensorflow[and-cuda]` was installed, and
+`tf.config.list_physical_devices('GPU')` still returned `[]`. The cause: those CUDA and cuDNN
+wheels drop their shared objects under `site-packages/nvidia/*/lib`, and **TensorFlow does not
+add that path to the loader itself.**
+
+Fixed by replacing `.venv-train/bin/python` with a wrapper that builds `LD_LIBRARY_PATH`
+before exec-ing the real interpreter, and mirroring it in `activate`:
+
+```bash
+#!/bin/bash
+NVLIBS=$(find "$(dirname "$0")/../lib/python3.12/site-packages/nvidia" -maxdepth 2 -type d -name lib 2>/dev/null | tr '\n' ':')
+export LD_LIBRARY_PATH="${NVLIBS}${LD_LIBRARY_PATH}"
+exec -a "$0" "/home/punpunia/.local/share/uv/python/cpython-3.12-linux-x86_64-gnu/bin/python3.12" "$@"
+```
+
+Two dead ends before that one, recorded so nobody repeats them: a `sitecustomize.py` runs too
+late (the loader path is read at process start, not at import), and a wrapper that exec's
+`$0` recurses into itself. The wrapper must name the *real* interpreter by absolute path.
+
+> **The venvs are not in git.** Anyone cloning fresh hits the same GPU problem and has to
+> redo this. It is described in the README's *On GPUs* section.
+
+### Everything else matched
+
+Two separate environments really are mandatory (`mediapipe 0.10.21` pins `protobuf 4.25.9`,
+TensorFlow 2.21 wants ≥5.28). The `<1.0` pin on MediaPipe is load-bearing: installing plain
+`mediapipe` pulls 0.10.35, whose package contains only `modules/` and `tasks/` — no
+`solutions`, so no `Hands` detector.
+
+---
+
+## 3. The datasets, and a decision the old plan did not contain
+
+The old plan was: train on `alphabet`, test on `ayuraj`. That produces an honest number but a
+weak model, because `alphabet` is ~78k images of **one signer**. Holding out the only other
+signer means shipping a model that has never seen a second pair of hands.
+
+So a third dataset was added — [`danrasband/asl-alphabet-test`](https://www.kaggle.com/datasets/danrasband/asl-alphabet-test),
+25 MB, a different person in different lighting, purpose-built as a companion test set for
+`grassknoted/asl-alphabet`. That buys both halves at once: two signers in training, and a
+test number that describes the model actually being shipped.
+
+<p align="center">
+  <img src="docs/dataset-split.svg" alt="Three photo datasets become one landmark file, split into train, validation and a held-out test set" width="100%">
+</p>
+
+**Detection rates** (`prepare_dataset.py` reports these; worth checking before every run):
+
+| dataset | detected | rate |
+|---|---|---|
+| alphabet | 64,765 / 78,000 | 83.0% |
+| ayuraj | 1,742 / 1,815 | 96.0% |
+| danrasband | 765 / 780 | 98.1% |
+
+`n` was the only class below 60% (56.6%). That matters later — see §6.
+
+> **Trap, for whoever samples this data again:** a first pass with `--limit-per-class 50`
+> reported **0% detection for `a` and `e`**, which looks alarming. It is an artefact. Files
+> sort naturally, so the first 50 of a class are one contiguous burst from a single camera
+> angle. The full run gave 74.5% and 77.2%. Do not tune anything on a small `--limit-per-class`
+> sample.
+
+Kaggle downloads need the CLI (`pip install kaggle` in `.venv-infer`) and an API token at
+`~/.kaggle/access_token`.
+
+---
+
+## 4. Training
+
+```bash
+./.venv-train/bin/python train_model.py --landmarks landmarks.npz --epochs 40 --test-dataset danrasband
+```
+
+308,602 parameters. Ran 20 of 40 epochs, ~65 s each on the RTX 3050; `EarlyStopping` restored
+epoch 12. Epoch 1 hit 78.6% training accuracy — worth noting because the failure mode the old
+handoff warned about (`BN_MOMENTUM = 0.99` collapsing the model to a single class, validation
+pinned at exactly 1/26 = 3.85%) would have been obvious right there. It did not happen.
+`BN_MOMENTUM` stays at 0.9.
+
+<p align="center">
+  <img src="docs/training-accuracy.png" alt="Training and validation accuracy and loss over 20 epochs" width="640">
+</p>
+
+Training and validation track each other with a small, stable gap. No divergence, so no
+memorisation — which is the thing this plot exists to show.
+
+---
+
+## 5. Two bugs found in code the previous session had written
+
+Both were invisible against synthetic data and only surfaced against a real trained model.
+
+### `export_onnx.py` failed its own parity check
+
+Symptom: `Error: could not match output 'logits' (best error 0.060)`. Nothing was wrong with
+the conversion. Two separate causes stacked:
+
+1. **The probe input was uniform pixel noise** (`rng.uniform(0, 255, ...)`), which is nothing
+   `render_skeleton()` could ever produce. So far outside BatchNorm's calibration that logits
+   reached ±210, and at that magnitude ordinary float rounding exceeds the tolerance. Fixed by
+   probing with an actual rendered skeleton. Error dropped 0.060 → 0.010 — still failing.
+2. **Keras was running on the GPU, ONNX Runtime on the CPU.** The check was comparing cuDNN
+   against ONNX Runtime — two kernel implementations — rather than measuring the conversion.
+   Fixed by hiding the GPU inside `export_onnx.py`.
+
+Final parity: **1.14e-05**, consistent with the 6.7e-06 the synthetic runs reported.
+
+*Generalisable lesson: verify a converted model on the device it will actually run on, with
+inputs from its real distribution. Both halves matter.*
+
+### `evaluate.py` measured the wrong thing (not a bug, a gap)
+
+Accuracy describes a bare `argmax`. The translator never uses a bare `argmax` — it commits a
+letter only above `COMMIT_CONFIDENCE`. Two measurements were added:
+
+- **Coverage and precision at the commit gate.** Test set: commits on 94.6% of hands, and is
+  right 96.7% of the time when it does. That predicts felt reliability far better than 93.7%.
+- **Jitter stability.** Re-render the same landmarks under small perturbations and count
+  prediction flips. This measures the *original symptom* — a still hand whose prediction
+  jumped — rather than a proxy for it.
+
+Stability result, and the interesting part is the split:
+
+| | agreement |
 |---|---|
-| como entrenó: sin normalizar, RGB | **98.6%** |
-| + centrada al 70% (lo que hacía el traductor) | **75.3%** |
-| + canales R/B invertidos | **39.6%** |
+| Predictions that were correct | **99.0%** |
+| Predictions that were wrong | 85.7% |
 
-### Bug 1 — canales R/B invertidos (costaba ~49 puntos por sí solo)
-
-MediaPipe define su paleta como tuplas **BGR**. El dataset guardaba los colores visualmente
-correctos, y `image_dataset_from_directory(color_mode='rgb')` los entregaba en orden **RGB**: canal 0
-= R. Pero el traductor pasaba `ia_canvas`, un array de OpenCV en orden **BGR**, sin convertir: canal
-0 = B. El meñique entrenaba con canal 0 = 21 y en vivo recibía 192. Cada dedo llegaba con el color
-cambiado.
-
-### Bug 2 — normalización asimétrica
-
-Las manos del dataset ocupaban entre **29% y 76%** del lienzo en posiciones arbitrarias (medido sobre
-imágenes reales). El traductor las centraba siempre al **70%**. El modelo nunca vio esa distribución.
-
-### Bug 3 — deformación por mezcla de unidades
-
-`box_size = max(width, height)` combinaba coordenadas normalizadas por el **ancho** del frame con
-otras normalizadas por el **alto**, y después dibujaba sobre un lienzo cuadrado. En una cámara 4:3 el
-esqueleto se achataba al **75%** de su ancho real.
-
-### Bug 4 — el 97.9% de validación era mentira
-
-Split aleatorio 80/20 sobre archivos que eran variantes casi idénticas del mismo frame (`A0.jpg`,
-`A0 (2).jpg`, …, y `hand1_0_bot_seg_1..5`). Casi cada imagen de validación tenía un gemelo en
-entrenamiento. **No medía generalización.**
+Correct predictions hold still; flicker is concentrated on genuinely ambiguous handshapes.
+That is the shape you want. A model that flickered uniformly would be unstable; this one is
+merely uncertain about the letters that *are* uncertain.
 
 ---
 
-## 5. Invariantes del diseño — NO ROMPER
+## 6. Limitations — read this before promising anything
 
-Estas propiedades son la razón de ser del rediseño. Si alguna se rompe, vuelven los bugs.
+**`n` is weak, and it compounds.** 54% recall on test, usually predicted as `m`. Two causes
+multiply: M/N/S/T are all a fist with the thumb in a different place, *and* `n` had the worst
+MediaPipe detection rate of any class (56.6%), so it reached training with the fewest samples.
+Fixing it needs more `n` data specifically, not more epochs.
 
-1. **`preprocessing.render_skeleton()` es la única función que dibuja.** La llaman el pipeline de
-   entrenamiento, `evaluate.py`, `check_render.py` y el traductor. Nunca dibujar un esqueleto en otro
-   lado.
-2. **`preprocessing.py` importa SOLO `cv2` y `numpy`.** No agregarle mediapipe. Ver §7: mediapipe y
-   TensorFlow no pueden convivir, y este módulo tiene que ser importable desde ambos entornos. La
-   paleta de mediapipe está transcrita adentro (verificada byte a byte contra la original).
-3. **`render_skeleton()` devuelve RGB genuino**, no un buffer BGR de OpenCV. Para mostrarlo en una
-   ventana de cv2 hay que convertir con `cv2.cvtColor(..., cv2.COLOR_RGB2BGR)`.
-4. **`CANVAS_SIZE` y `HAND_FILL` son compartidos.** Cambiar cualquiera obliga a reentrenar.
-5. **Las capas `conv1_relu` y `dense_features` tienen nombre explícito** en
-   `train_model.build_model()`. `export_onnx.py` las expone como salidas ONNX con nombre estable. Si
-   se les cambia el nombre, se rompe el visualizador.
-6. **`motion.py` consume landmarks en píxeles crudos, NO normalizados.** La normalización recentra la
-   mano en cada frame, que es justamente lo que borra el movimiento que J y Z necesitan.
-7. **`BN_MOMENTUM = 0.9` en `train_model.py`.** No volver al 0.99 de Keras. Ver §11.
+**The second signer is 2.6% of the training set.** `ayuraj` contributes 1,742 samples against
+`alphabet`'s 64,765. `class_weight` in `train_model.py` balances *classes*, not *datasets*, so
+the model is still dominated by one person's hands. The 3-point val/test gap is encouraging,
+but do not read it as "subject-independent". More signers is the lever; epochs are not.
 
----
+**J and Z are rules, not learning.** No ASL image dataset stores them as sequences, so
+`motion.py` checks trajectory geometry by hand. In live testing J resolves well; **Z leans more
+on its initial handshape than on the movement**, because `Z_MIN_REVERSALS = 2` demands two
+clean direction changes. Acceptable, but it is pattern-matching, not recognition.
 
-## 6. Inventario de archivos
+**Sign J and Z deliberately.** At 30 fps a fast gesture motion-blurs the hand enough for
+MediaPipe to drop it, and `realtime_translator.py` calls `tracker.reset()` whenever the hand
+disappears — so a rushed gesture destroys its own trajectory. `HISTORY_FRAMES` was raised
+24 → 45 (0.8 s → 1.5 s) and `SMOOTHING` 3 → 5 for this.
 
-### Pipeline (todo nuevo o reescrito)
+**Do not lower `MOVING_THRESHOLD`.** This was tried, to catch slow gestures, and measured
+before being kept — which is the only reason it did not ship. Instantaneous speed cannot
+separate a slow gesture from a jittery still hand; the distributions overlap almost entirely:
 
-| Archivo | Rol |
-|---|---|
-| `preprocessing.py` | **Núcleo.** Normalización, render compartido, aumentación. Solo cv2+numpy. |
-| `prepare_dataset.py` | MediaPipe una vez sobre las fotos originales → `landmarks.npz` |
-| `train_model.py` | Reescrito: split por bloques, aumentación en landmarks, BN+dropout+GAP |
-| `evaluate.py` | Matriz de confusión, métricas por clase, dos accuracies separadas |
-| `export_onnx.py` | **No existía.** Exporta con salidas nombradas + verifica paridad |
-| `check_render.py` | Contact sheet de lo que ve la red. La verificación más importante |
-| `motion.py` | Detección de J y Z por trayectoria |
-| `realtime_translator.py` | Reescrito: deletreo, `--activations`, `--debug-motion` |
+| | still hand (light jitter) | still hand (heavy jitter) | slow J |
+|---|---|---|---|
+| median speed | 0.011 | 0.023 | 0.023 |
 
-`visualize_activations.py` fue borrado; su función es ahora la bandera `--activations` del traductor.
-Está en el historial de git si hiciera falta.
+At `0.018`, a still hand holds the `COMMIT_FRAMES = 10` consecutive frames a letter needs only
+**55%** of the time, and 0.8% under heavy jitter. Spelling breaks outright. It stays at 0.035,
+and the reasoning is in a comment in `motion.py` so nobody re-derives it.
 
-### Requirements — dos archivos, a propósito
-
-- `requirements.txt` → inferencia y `prepare_dataset.py` (mediapipe, opencv, onnxruntime, numpy<2)
-- `requirements-train.txt` → `train_model.py`, `evaluate.py`, `export_onnx.py` (tensorflow, tf2onnx,
-  sklearn, matplotlib, opencv, numpy)
-
-### Constantes que importan
-
-```python
-# preprocessing.py
-CANVAS_SIZE = 192            # lienzo de dibujo; 3.4x más rápido que 400, ~1% de diferencia
-REFERENCE_CANVAS = 400       # los grosores de mediapipe están definidos para este tamaño
-HAND_FILL = 0.7              # fracción del lienzo que ocupa el bbox de la mano
-MODEL_INPUT_SIZE = 96        # entrada del modelo (antes 64)
-HAND_MODEL_COMPLEXITY = 1    # compartido: dataset e inferencia miden con el mismo detector
-
-# train_model.py
-BN_MOMENTUM = 0.9            # NO usar el 0.99 de Keras — ver §11
-
-# realtime_translator.py
-CONFIDENCE_FLOOR = 0.50      # debajo de esto muestra "Not sure..."
-COMMIT_CONFIDENCE = 0.75     # confianza mínima para agregar una letra al buffer
-COMMIT_FRAMES = 10           # frames seguidos de acuerdo antes de confirmar
-SMOOTHING_WINDOW = 8         # promedio móvil de probabilidades
-LANDMARK_ALPHA = 0.35        # suavizado exponencial de los landmarks
-
-# motion.py  (calibrar contra una mano real — ver §10)
-HISTORY_FRAMES = 24          # ~0.8 s a 30 fps
-MIN_PATH_LENGTH = 0.55       # recorrido mínimo, en anchos de mano
-MOVING_THRESHOLD = 0.035     # velocidad por encima de la cual la mano "se mueve"
-J_MIN_DESCENT = 0.20
-J_MIN_HOOK = 0.12
-Z_MIN_REVERSALS = 2
-Z_MIN_HORIZONTAL = 0.30
-```
+If someone does want to gate commits during slow gestures, **path length is the discriminator,
+not speed** — still hand 0.16, slow J 0.90, slow Z 1.31 hand-widths, cleanly separated. It has
+a cost: path stays elevated for the full window after moving between letters, so normal
+spelling gets slower. It was offered and declined; spelling currently lands first try.
 
 ---
 
-## 7. Setup en Linux
+## 7. Visual assets — what exists and what each is for
 
-### Trampa central: mediapipe y TensorFlow NO conviven
+Everything lives in `docs/`. All are current as of this session.
 
-```
-mediapipe 0.10.21  requiere  protobuf<5,>=4.25.3   y  numpy<2
-tensorflow 2.20    requiere  protobuf>=5.28
-```
+| File | What it shows | Regenerated by | For the README? |
+|---|---|---|---|
+| `dataset-split.svg` | Three sources → one npz → train/val/test, with the accuracies | hand-written | **yes** — the headline concept |
+| `training-accuracy.png` | Accuracy and loss curves, 20 epochs | `train_model.py`, every run | **yes** |
+| `confusion-test.png` | Confusion matrix, unseen dataset | `evaluate.py` | **yes** — the honest one |
+| `confusion-validation.png` | Confusion matrix, validation | `evaluate.py` | optional |
+| `render-check.png` | Contact sheet, one skeleton per letter | `check_render.py` | **yes** — shows what the net sees |
+| `render-check-augment.png` | Same, augmented | `check_render.py --augment` | optional |
+| `architecture.svg` | CNN layer diagram | hand-written | **yes** |
+| `pipeline.svg` | Capture → detect → normalise → classify | hand-written | **yes** |
 
-Son mutuamente incompatibles. **Hacen falta dos virtualenvs.** Por eso `preprocessing.py` no importa
-mediapipe: así los dos entornos pueden renderizar igual.
+**Verified against the code this session:** `architecture.svg` matches `build_model()` exactly
+(96×96×3 → 32/64/128 double-conv blocks → GAP → Dense 128 → Dense 26) and `pipeline.svg` is
+correct (70% fill, 96×96, 26 letters). Neither needed changes.
 
-### Segunda trampa: mediapipe 1.0 borró la API que usa el proyecto
+`dataset-split.svg` is new — nothing illustrated the three-way split, which is this version's
+main structural change.
 
-mediapipe 1.0.x eliminó `mediapipe.solutions` por completo (solo quedan `modules` y `tasks`). No hay
-reemplazo directo para el detector `Hands`. El pin `mediapipe>=0.10.21,<1.0` en `requirements.txt` es
-**imprescindible**, no precautorio. Un `pip install mediapipe` pelado rompe el proyecto.
+Two caveats for whoever edits these:
 
-### Tercera trampa: la versión de Python
+- The hand-written SVGs are **light-themed with an explicit white background**. They stay
+  readable on GitHub's dark theme, but they read as light cards. Making them theme-aware was
+  deliberately not attempted — GitHub's SVG sanitiser makes `prefers-color-scheme` unreliable,
+  and the `<picture>` two-file trick was more machinery than it was worth.
+- Preview them with `rsvg-convert -w 1200 docs/x.svg -o /tmp/x.png` before committing. The
+  first draft of `dataset-split.svg` had text overflowing the frame, invisible in source.
 
-Ni TensorFlow ni MediaPipe publican wheels para Python 3.13+. **Usar 3.11 o 3.12.**
+`generar_arquitectura.py`, `generar_infografia.py`, `arquitectura_3d.png` and
+`infografia_educativa.png` are referenced by the old handoff but **do not exist in this
+clone** — they were gitignored local assets from the Windows session. Nothing depends on them.
 
-### Comandos
-
-```bash
-# Sacar el proyecto de OneDrive: el I/O sincronizado fue el cuello de botella original
-cp -r "/ruta/al/ProyectoNN" ~/proyecto-nn && cd ~/proyecto-nn
-
-python3.12 -m venv .venv-infer
-./.venv-infer/bin/pip install -r requirements.txt
-
-python3.12 -m venv .venv-train
-./.venv-train/bin/pip install -r requirements-train.txt
-```
-
-### Verificar la GPU
-
-```bash
-./.venv-train/bin/python -c "import tensorflow as tf; print(tf.config.list_physical_devices('GPU'))"
-```
-
-Tiene que listar la RTX 3050. El extra `[and-cuda]` trae las wheels de CUDA y cuDNN, así que el
-driver NVIDIA es la única dependencia de sistema (el 577.05 que ya está instalado sobra).
-
-`train_model.py` ya llama a `set_memory_growth` para que TF no tome los 6 GB de una.
-
-**Sobre precisión mixta:** existe la bandera `--mixed-precision` pero está **apagada por defecto** y
-está bien así. El cuello de botella es el render en CPU, no la GPU, y complica la exportación a ONNX.
+There is also an ASL alphabet reference sheet (one real photo per letter, built from the
+training data) that was generated ad hoc for live testing and not kept. Rebuild it if needed —
+it is genuinely useful when testing, since signing requires knowing the alphabet.
 
 ---
 
-## 8. Los datasets
+## 8. State of the repository
 
-Hay que bajar las **fotos originales**, no esqueletos ya renderizados. El `archive/` que está en el
-proyecto contiene esqueletos pre-renderizados: **no sirve** para este pipeline (`prepare_dataset.py`
-falla con un mensaje explícito si se lo apunta ahí, porque MediaPipe no detecta manos en dibujos).
+Committed nothing — the working tree is left for review.
 
-Por los patrones de nombre, el `archive/` actual mezcla al menos dos fuentes:
-- letras con nombres tipo `A0.jpg` / `A1000.jpg` → estilo *ASL Alphabet* de Kaggle
-- dígitos tipo `hand1_0_bot_seg_1_cropped` → estilo `ayuraj/asl-dataset`
+```
+ M README.md              metrics, three datasets, corrected licences, GPU notes
+ M asl_cnn_model.onnx     retrained, 26 classes, replaces the 36-class model
+ M class_names.txt        36 → 26
+ M docs/training-accuracy.png
+ M evaluate.py            +threshold metrics, +jitter stability
+ M export_onnx.py         CPU-pinned parity, realistic probe input
+ M motion.py              window 24 → 45, smoothing 3 → 5
+ D asl_cnn_model.h5       deleted: 36-class legacy Keras, nothing referenced it
+?? docs/dataset-split.svg
+?? docs/confusion-test.png  docs/confusion-validation.png
+?? docs/render-check.png    docs/render-check-augment.png
+```
 
-Como el proyecto pasó a **26 letras**, hace falta:
+### Licence correction — do not skip this
 
-1. **Un dataset principal de letras A–Z.** El *ASL Alphabet* de Kaggle (~3000 img/clase, 200×200,
-   ~1 GB). Ojo: es de **un solo sujeto** en condiciones casi idénticas, así que por sí solo
-   generaliza mal.
-2. **Un segundo dataset de letras con otros sujetos**, por ejemplo las letras de `ayuraj/asl-dataset`
-   (mucho más chico). Es barato y es lo único que permite un test set honesto.
+The old README credited `MediaPipe_Processed_ASL_Dataset` under CC BY-SA 4.0. **That dataset
+is no longer used.** The actual training data:
 
-Layout esperado: una carpeta por clase dentro de cada raíz. El script tolera un nivel extra de
-anidamiento (los zips de Kaggle suelen traer `asl_alphabet_train/asl_alphabet_train/A/...`) y
-normaliza los nombres de clase a minúsculas.
+| Dataset | Role | Licence |
+|---|---|---|
+| `grassknoted/asl-alphabet` | main training set | **GPL-2.0** |
+| `ayuraj/asl-dataset` | extra signers | CC0-1.0 |
+| `danrasband/asl-alphabet-test` | held-out test | CC0-1.0 |
+
+The dominant share of training data is **GPL-2.0**, not CC BY-SA. The README now states this
+and points at the licences rather than interpreting them; whether weights are a derivative
+work of training data is unsettled and this repo should not pretend otherwise.
 
 ---
 
-## 9. El pipeline: cuatro pasos
+## 9. What is still open
 
-```bash
-# 1. Landmarks desde las fotos originales (entorno de INFERENCIA — usa mediapipe)
-./.venv-infer/bin/python prepare_dataset.py \
-    --source alphabet=~/datasets/asl_alphabet_train \
-    --source ayuraj=~/datasets/asl_dataset
-
-# 2. Mirar qué ve la red ANTES de entrenar (cualquiera de los dos entornos)
-./.venv-infer/bin/python check_render.py
-./.venv-infer/bin/python check_render.py --augment
-
-# 3. Entrenar (entorno de ENTRENAMIENTO)
-./.venv-train/bin/python train_model.py --landmarks landmarks.npz \
-    --epochs 40 --test-dataset ayuraj
-
-# 4. Métricas honestas
-./.venv-train/bin/python evaluate.py
-
-# 5. Exportar para inferencia, con verificación de paridad
-./.venv-train/bin/python export_onnx.py
-
-# 6. Probar en vivo (entorno de INFERENCIA)
-./.venv-infer/bin/python realtime_translator.py --activations
-```
-
-### Flags disponibles
-
-```
-prepare_dataset.py  --source NAME=PATH (repetible, obligatorio)  --out landmarks.npz
-                    --classes a,b,...,z   --pad 0.25   --min-confidence 0.3
-                    --workers <cpu/2>     --limit-per-class 0
-
-train_model.py      --landmarks landmarks.npz   --out asl_cnn_model.keras
-                    --input-size 96   --batch-size 128   --epochs 40
-                    --val-fraction 0.2   --test-dataset ""   --seed 123
-                    --mixed-precision
-
-evaluate.py         --model asl_cnn_model.keras   --split split.npz   --landmarks ""
-
-export_onnx.py      --model asl_cnn_model.keras   --out asl_cnn_model.onnx
-                    --opset 15   --samples 200
-
-check_render.py     --landmarks   --out docs/render-check.png   --size 96
-                    --tile 96   --columns 13   --augment   --class a   --count 24
-
-realtime_translator.py  --model   --classes   --camera 0
-                        --activations   --debug-motion
-```
-
-### Consejo: probar el pipeline en chico primero
-
-```bash
-./.venv-infer/bin/python prepare_dataset.py --source alphabet=~/datasets/asl_alphabet_train \
-    --limit-per-class 50 --out landmarks-small.npz
-./.venv-train/bin/python train_model.py --landmarks landmarks-small.npz --epochs 3
-```
-
-Confirma que todo el circuito anda antes de gastar la corrida larga.
+1. **Commit and release.** Working tree is reviewed-pending. `docs/*.png` are untracked —
+   decide whether generated artefacts belong in git.
+2. **`n`.** The one class worth targeted work. Needs more `n` images, not more training.
+3. **More signers.** The single highest-value improvement available, and the only real fix for
+   the val/test gap.
+4. **Z's motion detection**, if the rule-based version stops being good enough. A learned
+   temporal model needs recorded sequences, which means capture tooling — explicitly declined
+   in a previous session, so revisit that decision before building it.
+5. **`SpellingBuffer` commits `i` before a slow J completes** in principle (`is_moving()`
+   reads False at the J's speed), yielding `IJ`. Not observed in live testing — the window
+   change may have made it moot. If it appears, §6 has the fix and its cost.
 
 ---
 
-## 10. Verificación — en orden de importancia
+## 10. Decisions already made — do not re-litigate
 
-1. **El contact sheet contra la ventana en vivo.** Correr `check_render.py`, abrir
-   `docs/render-check.png`, y compararlo contra la ventana `AI View (Skeleton)` del traductor.
-   **Tienen que verse iguales.** Es la prueba de que la brecha de dominio se cerró; si fallan, nada
-   de lo demás importa. Qué mirar: manos centradas, todas del mismo tamaño, colores por dedo
-   consistentes (pulgar crema, índice violeta, medio amarillo, anular verde, meñique azul,
-   articulaciones de la palma rojas), ninguna mano cortada en el borde.
+Carried forward from previous sessions and confirmed by this one:
 
-2. **Tasa de detección de MediaPipe.** `prepare_dataset.py` la reporta por clase y avisa si alguna
-   baja del 60%. Esperable 85-95%. Una clase muy por debajo del resto hay que saberlo antes de
-   entrenar, no después.
-
-3. **Las curvas de entrenamiento.** `docs/training-accuracy.png`. Entrenamiento y validación tienen
-   que ir juntas; una brecha que se abre significa que está memorizando.
-
-4. **La matriz de confusión.** Las confusiones que queden deberían ser entre letras que
-   genuinamente comparten forma de mano — **M, N, S y T** son todas un puño con el pulgar en
-   distinto lugar. Eso es señal de que el modelo se comporta razonablemente. Cualquier otra cosa
-   grande en la matriz merece investigación.
-
-5. **Paridad ONNX.** `export_onnx.py` falla solo si la diferencia máxima supera 1e-4. En las pruebas
-   sintéticas dio ~6.7e-06.
-
-6. **La prueba en vivo.** Con la mano quieta la predicción **tiene que quedarse fija** — ese era el
-   síntoma original. Después: deletrear una palabra completa, y probar J y Z.
-
-7. **Calibrar J/Z.** Correr `realtime_translator.py --debug-motion`, hacer las señas, y mirar los
-   valores medidos contra los umbrales en pantalla. Ajustar las constantes arriba de `motion.py`.
-   Los valores actuales salieron de trayectorias sintéticas y es esperable que necesiten ajuste con
-   una mano real y una cámara real.
-
----
-
-## 11. Trampas conocidas (ya resueltas — no reintroducir)
-
-### `BatchNormalization(momentum=0.99)` colapsa el modelo
-
-El default de Keras asume corridas largas. Con pocos cientos de pasos las estadísticas móviles quedan
-a medio converger, y con siete capas de normalización apiladas el error se compone hasta que **el
-modelo predice una sola clase en inferencia**, aunque el accuracy de entrenamiento suba normal.
-
-Peor: eso envenena a `EarlyStopping`, que ve validación clavada en el azar y elige la **época 1**
-como la mejor.
-
-Apareció al probar: validación clavada en 3.85% (= 1/26 exacto) con entrenamiento en 52%. Con
-`momentum=0.9` pasó a 92%. **Ya está arreglado en `train_model.py`; no volver a 0.99.**
-
-### `np.argsort` sobre claves compuestas
-
-`natural_key()` devuelve tuplas. Pasarle una lista de tuplas a `np.argsort` la convierte en array 2D
-y ordena por el eje equivocado, devolviendo índices 2D. Se usa `sorted()` de Python. Ya arreglado.
-
-### La aumentación no debe recortar articulaciones sueltas
-
-Un `np.clip` por punto dobla los dedos en vez de mover la mano. `augment_landmarks()` reescala y
-desplaza el esqueleto **completo** para que entre en el lienzo. Verificado: 20.000 aumentaciones
-quedan dentro de `[0,1]` con deformación relativa < 3.4%.
-
-### OneDrive
-
-El dataset (105k archivos) vivía dentro de OneDrive, que lo sincroniza y hace el I/O lentísimo — fue
-el motivo original del `cache()` en disco. Guardar landmarks (~20 MB) en vez de imágenes elimina el
-problema de raíz, pero igual conviene tener el proyecto fuera de cualquier carpeta sincronizada.
-
----
-
-## 12. Qué esperar de los números
-
-**No esperar 97.9%.** Ese número venía de fuga de datos. `evaluate.py` devuelve dos accuracies y la
-brecha entre ellas es lo interesante:
-
-- **validación** — bloque contiguo reservado de las mismas grabaciones. Mide cuánto aprendió estas
-  manos en particular.
-- **test** — un dataset entero que nunca vio, idealmente grabado por otra gente. **Este es el que
-  predice el comportamiento en vivo**, y normalmente es bastante más bajo. Es el honesto.
-
-Una brecha grande entre los dos no es un fracaso: es información. Significa que el modelo aprendió al
-sujeto del dataset principal y no la seña en abstracto, y la respuesta es más diversidad de sujetos,
-no más épocas.
-
----
-
-## 13. Lo que falta
-
-1. **Correr el pipeline completo con datos reales** (§9).
-2. **Actualizar el README con las métricas reales.** Ahora mismo el README describe el diseño y
-   explica cómo leer los resultados, pero **no afirma ningún porcentaje**, a propósito: no había
-   modelo entrenado que los respaldara. Al terminar el paso 4, agregar los dos números.
-3. **Reemplazar `asl_cnn_model.onnx`** (lo hace `export_onnx.py`) y confirmar que `class_names.txt`
-   quedó con 26 clases (lo reescribe `train_model.py`).
-4. **Calibrar los umbrales de J/Z** contra una mano real (§10, punto 7).
-5. **Considerar borrar `asl_cnn_model.h5`** del repo: es el modelo viejo de 36 clases en formato
-   legacy de Keras, ya sin nada que lo use. Está rastreado en git.
-6. **Regenerar `arquitectura_3d.png` / `infografia_educativa.png`** si se usan para la presentación.
-   `generar_arquitectura.py` ya fue actualizado a 26 clases y la arquitectura nueva; los `.png` no se
-   regeneraron. Ambos scripts están en `.gitignore` (assets locales).
-
----
-
-## 14. Decisiones ya tomadas — no re-litigar
-
-El usuario las eligió explícitamente en la sesión anterior:
-
-- **26 clases, solo letras A–Z.** Los dígitos se descartaron. Motivo doble: datos muy escasos
-  (62-113 archivos por dígito contra 1887-5524 por letra; la clase `0` tenía solo 34 imágenes únicas
-  detrás de 62 archivos) y ambigüedad genuina — como seña **estática**, `0≡O`, `2≡V`, `6≡W` y `9≡F`
-  son la misma forma de mano.
-- **Reprocesar desde las fotos originales con MediaPipe**, en lugar de reutilizar los esqueletos ya
-  renderizados.
-- **Sin captura propia por webcam.** Se descartó agregar un `collect_samples.py`. Consecuencia
-  directa: J y Z tienen que resolverse por reglas, porque no hay secuencias grabadas para entrenar un
-  modelo temporal. Si en algún momento se quiere la versión aprendida, hace falta grabar secuencias
-  primero.
-- **Alcance:** métricas serias, deletreo de palabras, J/Z dinámicas, y setup GPU en Linux. Los cuatro
-  están implementados.
-
----
-
-## 15. Referencia rápida de la API
-
-```python
-import preprocessing as pp
-
-# MediaPipe → píxeles reales (21, 2). Convertir a píxeles ANTES de medir el bbox es lo
-# que mantiene el aspecto honesto.
-points_px = pp.landmarks_to_pixels(hand_landmarks, frame_w, frame_h)
-
-# Centrar y escalar al 70% del lienzo. Entra y sale en el mismo espacio de unidades.
-norm = pp.normalize_landmarks(points_px)          # (21, 2) en [0, 1]
-
-# Dibujar. Devuelve RGB genuino, listo para el modelo.
-image = pp.render_skeleton(norm, size=96)         # (96, 96, 3) uint8 RGB
-
-# Aumentar: rotación ±15°, escala 0.9-1.1, traslación ±5%, jitter, espejado.
-aug = pp.augment_landmarks(norm, rng)
-
-# Atajo para inferencia en vivo: hace las tres cosas de arriba.
-norm, image = pp.preprocess_hand(hand_landmarks, w, h)
-
-# Agregar el eje de batch. El modelo tiene su propio Rescaling, los píxeles van 0-255.
-batch = pp.model_input(image)
-```
-
-```python
-from motion import MotionTracker
-
-tracker = MotionTracker()
-tracker.update(points_px)        # píxeles CRUDOS, no normalizados
-letter = tracker.classify("i")   # 'j', 'z', o None
-tracker.is_moving()              # para no confirmar letras a mitad de un gesto
-tracker.debug_lines("i")         # lecturas en vivo para calibrar los umbrales
-```
-
-### Salidas del ONNX exportado
-
-```
-logits          (N, 26)         scores crudos; el softmax lo hace quien llame
-conv1_relu      (N, H, W, 32)   primer bloque conv, alimenta el mosaico de filtros
-dense_features  (N, 128)        capa oculta, alimenta la grilla de neuronas
-```
-
-Nombres estables, garantizados por `export_onnx.py`, que además empareja las salidas **por valor**
-(no por orden) antes de renombrarlas, así un tap mal etiquetado no pasa silenciosamente.
-
----
-
-## 16. Cómo se probó todo esto sin GPU ni datasets
-
-Por si hace falta reproducir o extender las pruebas: se creó un venv aislado con `tensorflow-cpu`, se
-generó un `landmarks.npz` sintético (26 clases, deformación fija por clase más ruido, dos datasets
-para poder ejercitar `--test-dataset`), y se corrió la cadena completa
-`prepare → train → evaluate → export → traductor`.
-
-Resultados de esa corrida sintética: entrenamiento converge (validación 91% en 6 épocas), split sin
-fuga, matriz de confusión generada, exportación ONNX con paridad de 6.7e-06, y el traductor
-consumiendo el modelo nuevo de punta a punta. J y Z se probaron con trayectorias sintéticas; el
-buffer de deletreo se probó en todos sus caminos (confirmación, anti-repetición, confianza baja,
-movimiento, espacio, backspace, repeat, clear).
-
-**Esas pruebas validan la mecánica, no la calidad del modelo.** La calidad solo se sabe con datos
-reales.
+- **26 classes, A–Z.** Digits dropped: too little data, and `0≡O`, `2≡V`, `6≡W`, `9≡F` are the
+  same static handshape.
+- **Reprocess from original photos**, never pre-rendered skeletons. `prepare_dataset.py` refuses
+  the latter with an explicit error, because MediaPipe finds no hands in drawings.
+- **No webcam capture tooling.** Consequence: J and Z must stay rule-based.
+- **One renderer.** `preprocessing.render_skeleton()` is the only function that draws, and
+  `preprocessing.py` imports nothing but `cv2` and `numpy` so both environments can call it.
+  This is the invariant the entire redesign exists to protect — the original bug was training
+  and inference drawing with different code. Do not add a second drawing path.
+- **Named layers** `conv1_relu` and `dense_features` are the visualiser's contract, exposed as
+  stable ONNX outputs. Renaming them breaks `--activations`.
+- **`motion.py` takes raw pixel landmarks**, never normalised ones — normalisation re-centres
+  the hand every frame, which is exactly what erases the movement J and Z depend on.

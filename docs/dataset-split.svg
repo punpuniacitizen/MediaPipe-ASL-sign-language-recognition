@@ -1,0 +1,84 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 268" width="920" height="268" role="img" aria-label="Three photo datasets become one landmark file, split into 53,207 training, 13,300 validation and 765 held-out test samples">
+  <rect x="0.5" y="0.5" width="919" height="267" rx="6" fill="#ffffff" stroke="#d0d7de"/>
+  <g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+
+    <!-- ============ sources ============ -->
+    <text x="24" y="30" font-size="11" letter-spacing="1.2" fill="#57606a" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">PHOTO DATASETS</text>
+
+    <g transform="translate(24,44)">
+      <rect x="0" y="0" width="250" height="54" rx="4" fill="#f6f8fa" stroke="#d0d7de"/>
+      <rect x="0" y="0" width="3" height="54" fill="#0969da"/>
+      <text x="16" y="23" font-size="13" font-weight="600" fill="#1f2328">alphabet</text>
+      <text x="16" y="41" font-size="11.5" fill="#57606a">64,765 hands · one signer</text>
+      <text x="234" y="23" text-anchor="end" font-size="11" fill="#57606a" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">83%</text>
+    </g>
+
+    <g transform="translate(24,108)">
+      <rect x="0" y="0" width="250" height="54" rx="4" fill="#f6f8fa" stroke="#d0d7de"/>
+      <rect x="0" y="0" width="3" height="54" fill="#0969da"/>
+      <text x="16" y="23" font-size="13" font-weight="600" fill="#1f2328">ayuraj</text>
+      <text x="16" y="41" font-size="11.5" fill="#57606a">1,742 hands · other signers</text>
+      <text x="234" y="23" text-anchor="end" font-size="11" fill="#57606a" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">96%</text>
+    </g>
+
+    <g transform="translate(24,172)">
+      <rect x="0" y="0" width="250" height="54" rx="4" fill="#fff8c5" stroke="#d4a72c"/>
+      <rect x="0" y="0" width="3" height="54" fill="#bf8700"/>
+      <text x="16" y="23" font-size="13" font-weight="600" fill="#1f2328">danrasband</text>
+      <text x="16" y="41" font-size="11.5" fill="#57606a">765 hands · never trained on</text>
+      <text x="234" y="23" text-anchor="end" font-size="11" fill="#57606a" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">98%</text>
+    </g>
+
+    <text x="24" y="248" font-size="11" fill="#57606a">Percentages are MediaPipe's hand-detection rate — not every photo yields landmarks.</text>
+
+    <!-- ============ arrows into the npz ============ -->
+    <g stroke="#d0d7de" stroke-width="1.5" fill="none">
+      <path d="M 274 71 H 300 V 135 H 322"/>
+      <path d="M 274 135 H 322"/>
+      <path d="M 274 199 H 300 V 135 H 322"/>
+    </g>
+    <path d="M 317 130 L 327 135 L 317 140 Z" fill="#0969da"/>
+
+    <!-- ============ landmarks.npz ============ -->
+    <g transform="translate(330,100)">
+      <rect x="0" y="0" width="170" height="70" rx="4" fill="#f6f8fa" stroke="#d0d7de"/>
+      <rect x="0" y="0" width="170" height="3" fill="#0969da"/>
+      <text x="85" y="30" text-anchor="middle" font-size="13" font-weight="600" fill="#1f2328" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">landmarks.npz</text>
+      <text x="85" y="50" text-anchor="middle" font-size="12" fill="#57606a">67,272 hands · 10 MB</text>
+    </g>
+    <text x="415" y="190" text-anchor="middle" font-size="11" fill="#57606a">One MediaPipe pass.</text>
+    <text x="415" y="206" text-anchor="middle" font-size="11" fill="#57606a">Training never touches</text>
+    <text x="415" y="222" text-anchor="middle" font-size="11" fill="#57606a">the photos again.</text>
+
+    <g stroke="#d0d7de" stroke-width="1.5" fill="none">
+      <path d="M 500 135 H 540"/>
+    </g>
+    <path d="M 535 130 L 545 135 L 535 140 Z" fill="#0969da"/>
+
+    <!-- ============ splits ============ -->
+    <text x="552" y="30" font-size="11" letter-spacing="1.2" fill="#57606a" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">SPLIT</text>
+
+    <g transform="translate(552,44)">
+      <rect x="0" y="0" width="344" height="54" rx="4" fill="#f6f8fa" stroke="#d0d7de"/>
+      <rect x="0" y="0" width="3" height="54" fill="#1a7f37"/>
+      <text x="16" y="23" font-size="13" font-weight="600" fill="#1f2328">train · 53,207</text>
+      <text x="16" y="41" font-size="11.5" fill="#57606a">alphabet + ayuraj, first 80% of each class block</text>
+    </g>
+
+    <g transform="translate(552,108)">
+      <rect x="0" y="0" width="344" height="54" rx="4" fill="#f6f8fa" stroke="#d0d7de"/>
+      <rect x="0" y="0" width="3" height="54" fill="#0969da"/>
+      <text x="16" y="23" font-size="13" font-weight="600" fill="#1f2328">validation · 13,300  →  96.8%</text>
+      <text x="16" y="41" font-size="11.5" fill="#57606a">last 20% of each class block</text>
+    </g>
+
+    <g transform="translate(552,172)">
+      <rect x="0" y="0" width="344" height="54" rx="4" fill="#fff8c5" stroke="#d4a72c"/>
+      <rect x="0" y="0" width="3" height="54" fill="#bf8700"/>
+      <text x="16" y="23" font-size="13" font-weight="600" fill="#1f2328">test · 765  →  93.7%</text>
+      <text x="16" y="41" font-size="11.5" fill="#57606a">a whole dataset, other hands</text>
+    </g>
+
+    <text x="552" y="248" font-size="11" fill="#57606a">Contiguous blocks — neighbouring frames are near-duplicates.</text>
+  </g>
+</svg>

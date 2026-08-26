@@ -31,6 +31,7 @@ import onnxruntime as ort
 import preprocessing as pp
 import ui
 from motion import MotionTracker
+from smoothing import OneEuroFilter
 
 WINDOW = "ASL Translator"
 FILTERS_WINDOW = "Conv Filters (enlarged)"
@@ -47,7 +48,8 @@ CONFIDENCE_FLOOR = 0.50      # below this the reading is reported as uncertain
 COMMIT_CONFIDENCE = 0.75     # and this much is needed to append a letter
 COMMIT_FRAMES = 10           # consecutive agreeing frames before committing
 SMOOTHING_WINDOW = 8         # rolling average over recent probability vectors
-LANDMARK_ALPHA = 0.35        # exponential smoothing on the landmarks themselves
+# Landmark smoothing itself lives in smoothing.OneEuroFilter, which adapts per frame
+# instead of using one fixed alpha -- see that module for why.
 
 
 def _dark_titlebar(window_name):
@@ -273,9 +275,9 @@ def main():
 
     buffer = SpellingBuffer()
     tracker = MotionTracker()
+    smoother = OneEuroFilter()
     layout = ui.Layout(show_vis=show_panels)
     score_history = []
-    previous = None
 
     filters_popup = Popup(FILTERS_WINDOW)
     reference_popup = Popup(REFERENCE_WINDOW, resizable=True)
@@ -320,12 +322,10 @@ def main():
             if results.multi_hand_landmarks:
                 landmarks = results.multi_hand_landmarks[0]
 
-                # Exponential smoothing on the raw landmarks, so the skeleton does not
-                # jitter with MediaPipe's per-frame noise.
-                points_px = pp.landmarks_to_pixels(landmarks, w, h)
-                if previous is not None:
-                    points_px = LANDMARK_ALPHA * points_px + (1 - LANDMARK_ALPHA) * previous
-                previous = points_px
+                # Adaptive smoothing: heavy on a still hand, where the only movement is
+                # MediaPipe's own jitter, and light on a fast one, so the skeleton keeps
+                # up with a real gesture instead of dragging behind it.
+                points_px = smoother(pp.landmarks_to_pixels(landmarks, w, h))
 
                 tracker.update(points_px)
                 normalized = pp.normalize_landmarks(points_px)
@@ -382,7 +382,7 @@ def main():
                     state.debug = tracker.debug_lines(letter)
             else:
                 score_history.clear()
-                previous = None
+                smoother.reset()
                 tracker.reset()
                 buffer.update(None, 0.0, False, False)
                 state.text = buffer.text

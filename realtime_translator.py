@@ -99,6 +99,22 @@ def _dark_titlebar(window_name):
         pass
 
 
+def _window_closed(name):
+    """True if `name` was created and the user has since closed it with the window
+    manager's own control (the native X), rather than it simply not existing yet.
+
+    OpenCV has no callback for this, so polling WND_PROP_VISIBLE is the only way to
+    find out. Wrapped broadly for the same reason `Popup` wraps every HighGUI call:
+    how a backend reports -- or reacts to -- a window the user just closed varies by
+    platform, and a query about window state must never be able to crash the loop
+    that's asking it.
+    """
+    try:
+        return cv2.getWindowProperty(name, cv2.WND_PROP_VISIBLE) < 1
+    except Exception:
+        return False
+
+
 class Popup:
     """A secondary cv2 window toggled by a button, that also notices if the user closes
     it with the window manager's own control instead of clicking the button again.
@@ -127,12 +143,8 @@ class Popup:
 
     def sync(self):
         """Call once per frame, before rendering. Detects an OS-level close."""
-        if self._created and self.open:
-            try:
-                if cv2.getWindowProperty(self.name, cv2.WND_PROP_VISIBLE) < 1:
-                    self.open = False
-            except Exception:
-                self.open = False
+        if self._created and self.open and _window_closed(self.name):
+            self.open = False
 
     def render(self, image):
         try:
@@ -307,6 +319,13 @@ def main():
                         min_tracking_confidence=0.5) as hands:
 
         while capture.isOpened():
+            # Checked before this frame draws anything: cv2.imshow silently recreates
+            # a window the user just closed, so checking after imshow would always see
+            # the window imshow itself just brought back -- the window would close and
+            # immediately reopen every frame instead of the program actually exiting.
+            if titlebar_done["main"] and _window_closed(WINDOW):
+                break
+
             ok, frame = capture.read()
             if not ok:
                 continue

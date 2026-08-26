@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 200" width="920" height="200" role="img" aria-label="Accuracy falls from 98.6% to 75.3% once the live camera framing is added, then to 39.6% once the channel order bug is added, measured on the model's own training images">
+  <rect x="0.5" y="0.5" width="919" height="199" rx="6" fill="#ffffff" stroke="#d0d7de"/>
+  <g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+
+    <!-- connectors with point-drop labels -->
+    <g stroke="#d0d7de" stroke-width="1.5" fill="none">
+      <path d="M 280 100 H 325"/>
+      <path d="M 590 100 H 635"/>
+    </g>
+    <g fill="#0969da">
+      <path d="M 320 95 L 330 100 L 320 105 Z"/>
+      <path d="M 630 95 L 640 100 L 630 105 Z"/>
+    </g>
+    <text x="302" y="90" text-anchor="middle" font-size="10.5" fill="#8c959f" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">-23.3 pts</text>
+    <text x="612" y="90" text-anchor="middle" font-size="10.5" fill="#8c959f" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">-35.7 pts</text>
+
+    <!-- card 1: baseline -->
+    <g transform="translate(20,20)">
+      <rect x="0" y="0" width="260" height="160" rx="4" fill="#f6f8fa" stroke="#d0d7de"/>
+      <rect x="0" y="0" width="260" height="3" fill="#0969da"/>
+      <text x="18" y="32" font-size="15" font-weight="600" fill="#1f2328">Trained accuracy</text>
+      <text font-size="12.5" fill="#57606a">
+        <tspan x="18" y="58">98.6%, measured on the</tspan>
+        <tspan x="18" y="76">model's own training-shaped</tspan>
+        <tspan x="18" y="94">images — correct colors,</tspan>
+        <tspan x="18" y="112">no camera framing yet.</tspan>
+      </text>
+    </g>
+
+    <!-- card 2: + camera framing -->
+    <g transform="translate(330,20)">
+      <rect x="0" y="0" width="260" height="160" rx="4" fill="#f6f8fa" stroke="#d0d7de"/>
+      <rect x="0" y="0" width="260" height="3" fill="#0969da"/>
+      <text x="18" y="32" font-size="15" font-weight="600" fill="#1f2328">+ camera framing</text>
+      <text font-size="12.5" fill="#57606a">
+        <tspan x="18" y="58">75.3%. A live hand gets</tspan>
+        <tspan x="18" y="76">centered to 70% of the</tspan>
+        <tspan x="18" y="94">frame; the training photos</tspan>
+        <tspan x="18" y="112">never were.</tspan>
+      </text>
+    </g>
+
+    <!-- card 3: + swapped channels -->
+    <g transform="translate(640,20)">
+      <rect x="0" y="0" width="260" height="160" rx="4" fill="#fff8c5" stroke="#d4a72c"/>
+      <rect x="0" y="0" width="260" height="3" fill="#bf8700"/>
+      <text x="18" y="32" font-size="15" font-weight="600" fill="#1f2328">+ swapped channels</text>
+      <text font-size="12.5" fill="#57606a">
+        <tspan x="18" y="58">39.6%. OpenCV hands over</tspan>
+        <tspan x="18" y="76">BGR pixels; the model was</tspan>
+        <tspan x="18" y="94">trained on RGB. This is</tspan>
+        <tspan x="18" y="112">what the translator saw.</tspan>
+      </text>
+    </g>
+  </g>
+</svg>

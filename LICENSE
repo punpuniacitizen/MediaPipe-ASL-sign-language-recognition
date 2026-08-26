@@ -23,6 +23,8 @@ SOFTWARE.
 ---
 
 This license covers the source code in this repository only. It does not
-cover the training dataset or the trained model weights (asl_cnn_model.h5,
-asl_cnn_model.onnx), which are derived from a third-party dataset licensed
-under CC BY-SA 4.0. See the "License" section of README.md for details.
+cover the training data or the trained model weights (asl_cnn_model.onnx),
+which are derived from three third-party datasets: ASL Alphabet by Akash
+Nagaraj (GPL-2.0), ASL Dataset by Ayush Thakur (CC0-1.0), and ASL Alphabet
+Test by Dan Rasband (CC0-1.0). See the "License" section of README.md for
+details and the individual dataset links.

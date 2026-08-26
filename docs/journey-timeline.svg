@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 200" width="920" height="200" role="img" aria-label="Project timeline: a broken 36-class model reporting a leaked 97.9%, a pipeline rebuild, a real 26-class retrain at 93.7% honest accuracy, and an interface rebuild">
+  <rect x="0.5" y="0.5" width="919" height="199" rx="6" fill="#ffffff" stroke="#d0d7de"/>
+  <g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+
+    <!-- connectors -->
+    <g stroke="#d0d7de" stroke-width="1.5" fill="none">
+      <path d="M 220 100 H 245"/>
+      <path d="M 450 100 H 475"/>
+      <path d="M 680 100 H 705"/>
+    </g>
+    <g fill="#0969da">
+      <path d="M 240 95 L 250 100 L 240 105 Z"/>
+      <path d="M 470 95 L 480 100 L 470 105 Z"/>
+      <path d="M 700 95 L 710 100 L 700 105 Z"/>
+    </g>
+
+    <!-- card 1: broken -->
+    <g transform="translate(20,20)">
+      <rect x="0" y="0" width="200" height="160" rx="4" fill="#fff8c5" stroke="#d4a72c"/>
+      <rect x="0" y="0" width="200" height="3" fill="#bf8700"/>
+      <text x="18" y="32" font-size="15" font-weight="600" fill="#1f2328">Broken</text>
+      <text font-size="12.5" fill="#57606a">
+        <tspan x="18" y="58">36 classes, trained with</tspan>
+        <tspan x="18" y="76">channel-swapped colors and</tspan>
+        <tspan x="18" y="94">unnormalized data. Reported</tspan>
+        <tspan x="18" y="112">97.9% — a leaked split.</tspan>
+      </text>
+    </g>
+
+    <!-- card 2: pipeline rebuilt -->
+    <g transform="translate(250,20)">
+      <rect x="0" y="0" width="200" height="160" rx="4" fill="#f6f8fa" stroke="#d0d7de"/>
+      <rect x="0" y="0" width="200" height="3" fill="#0969da"/>
+      <text x="18" y="32" font-size="15" font-weight="600" fill="#1f2328">Pipeline rebuilt</text>
+      <text font-size="12.5" fill="#57606a">
+        <tspan x="18" y="58">One shared renderer for</tspan>
+        <tspan x="18" y="76">training and inference —</tspan>
+        <tspan x="18" y="94">landmarks, not images,</tspan>
+        <tspan x="18" y="112">so the two can't drift apart.</tspan>
+      </text>
+    </g>
+
+    <!-- card 3: retrained -->
+    <g transform="translate(480,20)">
+      <rect x="0" y="0" width="200" height="160" rx="4" fill="#f6f8fa" stroke="#d0d7de"/>
+      <rect x="0" y="0" width="200" height="3" fill="#0969da"/>
+      <text x="18" y="32" font-size="15" font-weight="600" fill="#1f2328">Retrained</text>
+      <text font-size="12.5" fill="#57606a">
+        <tspan x="18" y="58">26 classes, real datasets,</tspan>
+        <tspan x="18" y="76">two signers, a held-out</tspan>
+        <tspan x="18" y="94">test set never trained on.</tspan>
+        <tspan x="18" y="112">93.7%, honest this time.</tspan>
+      </text>
+    </g>
+
+    <!-- card 4: interface rebuilt -->
+    <g transform="translate(710,20)">
+      <rect x="0" y="0" width="190" height="160" rx="4" fill="#f6f8fa" stroke="#d0d7de"/>
+      <rect x="0" y="0" width="190" height="3" fill="#0969da"/>
+      <text x="18" y="32" font-size="15" font-weight="600" fill="#1f2328">Interface rebuilt</text>
+      <text font-size="12.5" fill="#57606a">
+        <tspan x="18" y="58">Four windows become</tspan>
+        <tspan x="18" y="76">one. Adaptive smoothing,</tspan>
+        <tspan x="18" y="94">a validated colour palette,</tspan>
+        <tspan x="18" y="112">crash fixes from live use.</tspan>
+      </text>
+    </g>
+  </g>
+</svg>

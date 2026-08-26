@@ -14,11 +14,25 @@ A convolutional neural network, trained from scratch in TensorFlow, classifies t
   <img src="docs/architecture.svg" alt="CNN architecture: 96x96x3 input through three convolution and pooling blocks to a 26-class output" width="100%">
 </p>
 
+### Project history
+
+This repo shipped once already, with a model that claimed 97.9% accuracy and flickered wildly on a live webcam — the validation split was leaking near-duplicate frames, so the number never measured what it looked like it measured. Getting from there to here meant rebuilding the training pipeline around a single shared renderer, retraining on real datasets with an honest held-out test set, and rebuilding the interface on top of that. None of it was cosmetic; each step came out of a bug that was actually making the translator wrong.
+
+<p align="center">
+  <img src="docs/journey-timeline.svg" alt="Timeline: a broken 36-class model reporting a leaked 97.9%, a pipeline rebuild, a real 26-class retrain at 93.7% honest accuracy, and an interface rebuild" width="100%">
+</p>
+
+The full story — the bugs, the numbers, the dead ends — is in the [release notes](https://github.com/punpuniacitizen/MediaPipe-ASL-sign-language-recognition/releases).
+
 ### One renderer, both sides
 
 The single most important property of this pipeline is that **training and inference draw the skeleton with the same function**. `preprocessing.render_skeleton()` is called by the training data pipeline, by the evaluation script, and by the live translator.
 
 That is not an aesthetic preference. An earlier version of this project trained on skeleton images rendered by someone else and drew its own at inference time, and the two disagreed in three ways at once: the live canvas was an OpenCV BGR buffer fed to a model trained on RGB, so every finger arrived with its red and blue channels swapped; the training hands sat anywhere between 29% and 76% of the canvas while the live hand was always centered at 70%; and the normalization mixed width-relative with height-relative units, squashing the live skeleton to about 75% of its true width on a 4:3 camera. Measured on the training data itself, those mismatches took the model from 98.6% down to 39.6% — which is why the on-screen prediction used to flicker wildly while the hand sat still.
+
+<p align="center">
+  <img src="docs/bug-chain.svg" alt="Accuracy falls from 98.6% to 75.3% once camera framing is added, then to 39.6% once the channel order bug is added, measured on the model's own training images" width="100%">
+</p>
 
 Storing landmarks rather than images is what makes the shared renderer possible, and it has two side benefits: augmentation happens in landmark space (rotation, scale, translation, jitter, mirroring), which leaves stroke weight and palette untouched so every augmented sample still looks like something the renderer could produce from a real hand; and a whole dataset of landmarks is about 10 MB, small enough that training reads from RAM instead of walking through tens of thousands of files.
 

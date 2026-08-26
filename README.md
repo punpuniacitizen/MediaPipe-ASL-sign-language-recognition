@@ -28,6 +28,12 @@ Letters accumulate into words. A letter is committed once it has been the top pr
 
 Keys: `q` quit · `space` · `backspace` · `c` clear · `r` repeat last letter
 
+### Landmark smoothing
+
+MediaPipe's landmarks jitter a pixel or two every frame even on a motionless hand, so they are smoothed before anything else sees them. A fixed-alpha moving average has one dial and that dial trades the two things we want against each other: settle a still hand and a fast one visibly drags behind it. `smoothing.py` uses the [1-euro filter](https://gery.casiez.net/1euro/) instead, recomputing the cutoff every frame from how fast each landmark is currently moving — heavy smoothing at rest, where the only movement *is* detection noise, and light smoothing during a real gesture.
+
+Measured against the fixed alpha it replaced (simulated 30 fps hand, 2 px detection noise): residual shimmer on a still hand drops from 1.29 px RMS to 1.00, while lag during motion goes from a constant 62 ms — 124 px at 2000 px/s, since a fixed alpha's lag in *time* is constant and so its lag in *pixels* grows with speed — to 4–17 ms, staying within about 7 px at any speed. The crossover sits near 100 px/s: slower than that it filters harder than the old version, faster than that it gets out of the way.
+
 ### The interface
 
 Everything is laid out in a **single window** by `ui.py`: the camera feed, the skeleton the model actually receives, the three classes it is weighing, and the word buffer. Earlier versions opened four separate OS windows that had to be dragged into position on every run, and which OpenCV's Qt backend decorates with a toolbar on Linux — `WINDOW_GUI_NORMAL` turns that off.
